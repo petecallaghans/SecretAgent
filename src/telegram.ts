@@ -1,4 +1,5 @@
 import { Bot, InlineKeyboard, InputFile, type Context } from 'grammy';
+import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { Config } from './types.js';
 import { MODELS, MODEL_DISPLAY, type Gateway } from './gateway.js';
@@ -102,6 +103,11 @@ export class TelegramAdapter {
       await ctx.reply('Restarting…');
       setTimeout(() => {
         console.log('[telegram] Restart requested via /restart');
+        // Touch source file to trigger tsx watch restart; harmless under systemd
+        spawn('sh', ['-c', `sleep 1 && touch "${process.cwd()}/src/index.ts"`], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
         process.exit(0);
       }, 500);
     });
