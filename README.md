@@ -80,30 +80,21 @@ Telegram → TelegramAdapter → Gateway → Agent → Claude (via Agent SDK)
 - **Personality** — defined in `workspace/soul.md`, rewritten during onboarding
 - **Tools** — shell execution, web fetching/searching, file read/write, cron scheduling
 
-## Running 24/7 (systemd)
+## Running 24/7
+
+Install as a background service that survives logout and reboot:
 
 ```bash
-npm run build
-sudo cp secret-agent.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable secret-agent
-sudo systemctl start secret-agent
+npm run service install    # build + install + start
+npm run service status     # check if running (PID, uptime)
+npm run service logs       # tail logs (Ctrl+C to stop)
+npm run service stop       # stop the service
+npm run service start      # start it again
+npm run service restart    # restart
+npm run service uninstall  # stop + remove service
 ```
 
-Check status with `sudo systemctl status secret-agent` and logs with `journalctl -u secret-agent -f`.
-
-Edit the service file if your install path or user differs from `/root/SecretAgent`.
-
-## Docker
-
-```bash
-docker build -t secret-agent .
-docker run -d \
-  --env-file .env \
-  -v $(pwd)/workspace:/app/workspace \
-  -v $(pwd)/data:/app/data \
-  secret-agent
-```
+Works on **macOS** (launchd) and **Linux** (systemd) — platform is detected automatically.
 
 ## License
 
