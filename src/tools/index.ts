@@ -117,7 +117,7 @@ export function createToolServer(
     ),
     tool(
       'save_memory',
-      'Replace the entire long-term memory with new content. Use to update memory.md with important facts, preferences, and context.',
+      'Replace the entire long-term memory with new content. Use for permanent facts, preferences, and reference info — not daily notes (use append_log for those).',
       { content: z.string().describe('Full updated content for memory.md') },
       async ({ content }) => {
         await memory.saveMemory(content);
@@ -126,7 +126,7 @@ export function createToolServer(
     ),
     tool(
       'append_memory',
-      'Append a new entry to long-term memory without replacing existing content.',
+      'Append a new entry to long-term memory without replacing existing content. Use for permanent facts — not daily notes (use append_log for those).',
       { content: z.string().describe('Content to append to memory.md') },
       async ({ content }) => {
         await memory.appendMemory(content);
@@ -140,6 +140,24 @@ export function createToolServer(
       async ({ content }) => {
         await memory.saveSoul(content);
         return { content: [{ type: 'text' as const, text: 'Soul updated successfully.' }] };
+      },
+    ),
+    tool(
+      'append_log',
+      'Append to today\'s daily log. Use for conversation notes, observations, things that happened. Logs are loaded for 2 days then drop out of context. For permanent facts, use save_memory.',
+      { content: z.string().describe('Content to append to today\'s log') },
+      async ({ content }) => {
+        await memory.appendLog(content);
+        return { content: [{ type: 'text' as const, text: 'Log entry appended.' }] };
+      },
+    ),
+    tool(
+      'read_log',
+      'Read a daily log by date (YYYY-MM-DD).',
+      { date: z.string().describe('Date in YYYY-MM-DD format') },
+      async ({ date }) => {
+        const log = await memory.getLog(date);
+        return { content: [{ type: 'text' as const, text: log || '(no log for this date)' }] };
       },
     ),
     tool(

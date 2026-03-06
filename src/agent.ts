@@ -23,7 +23,7 @@ export class Agent {
     private state: { chatId: string },
   ) {}
 
-  private buildSystemPrompt(): string {
+  private async buildSystemPrompt(): Promise<string> {
     const parts: string[] = [];
 
     const soul = this.memory.getSoul();
@@ -31,6 +31,9 @@ export class Agent {
 
     const mem = this.memory.getMemory();
     if (mem) parts.push(`\n## Long-term Memory\n${mem}`);
+
+    const recentLogs = await this.memory.getRecentLogs();
+    if (recentLogs) parts.push(`\n## Recent Activity\n${recentLogs}`);
 
     parts.push(`\nCurrent date/time: ${new Date().toISOString()}`);
 
@@ -70,7 +73,7 @@ export class Agent {
     }
 
     const options: Record<string, unknown> = {
-      systemPrompt: this.buildSystemPrompt(),
+      systemPrompt: await this.buildSystemPrompt(),
       model: model || this.config.model,
       maxTurns: MAX_TURNS,
       allowedTools,
