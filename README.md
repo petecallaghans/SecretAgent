@@ -11,25 +11,13 @@ Your personal AI assistant on Telegram, powered by Claude. It personalizes itsel
 ## Quick Start
 
 ```bash
-# 1. Clone
-git clone https://github.com/petemill/SecretAgent.git
+git clone https://github.com/petecallaghans/SecretAgent.git
 cd SecretAgent
-
-# 2. Install dependencies
 npm install
-
-# 3. Run setup wizard
-npm run setup
-
-# 4. Start the bot
 npm run dev
 ```
 
-The setup wizard will walk you through:
-1. Verifying Claude Code is installed and authenticated
-2. Creating a Telegram bot (via @BotFather)
-3. Optionally restricting access to your Telegram user ID
-4. Writing your `.env` config
+That's it. On first run, the setup wizard launches automatically if no `.env` exists — it walks you through creating a Telegram bot and configuring the basics. You can also run it manually with `npm run setup`.
 
 ## First Message
 
@@ -43,16 +31,19 @@ Use `/reset` to start a fresh conversation (personality persists).
 
 ## Commands
 
-| Command   | Description                        |
-|-----------|------------------------------------|
-| `/start`  | Welcome message                    |
-| `/reset`  | Clear conversation history         |
-| `/memory` | Show what the bot remembers        |
-| `/cron`   | List scheduled tasks               |
+| Command    | Description                        |
+|------------|------------------------------------|
+| `/start`   | Welcome message                    |
+| `/reset`   | Clear conversation history         |
+| `/memory`  | Show what the bot remembers        |
+| `/cron`    | List scheduled tasks               |
+| `/model`   | Switch Claude model                |
+| `/approve` | Toggle approval mode for actions   |
+| `/webhook` | List registered webhooks           |
 
 ## Configuration
 
-All config lives in `.env` (created by `npm run setup`):
+All config lives in `.env` (created by setup):
 
 | Variable             | Default              | Description                              |
 |----------------------|----------------------|------------------------------------------|
@@ -63,6 +54,7 @@ All config lives in `.env` (created by `npm run setup`):
 | `WORKSPACE_DIR`      | `./workspace`        | Agent's working directory                |
 | `DATA_DIR`           | `./data`             | Session and cron data                    |
 | `SHELL_ALLOWLIST`    | *(empty = all)*      | Comma-separated allowed shell commands   |
+| `WEBHOOK_PORT`       | `3000`               | Port for incoming webhooks               |
 
 ## Scripts
 

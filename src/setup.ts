@@ -128,6 +128,7 @@ async function main(): Promise<void> {
     `WORKSPACE_DIR=./workspace`,
     `DATA_DIR=./data`,
     `SHELL_ALLOWLIST=`,
+    `WEBHOOK_PORT=3000`,
   ].join('\n') + '\n';
 
   writeFileSync(envPath, envContent);
