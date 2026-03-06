@@ -103,11 +103,17 @@ export class TelegramAdapter {
       await ctx.reply('Restarting…');
       setTimeout(() => {
         console.log('[telegram] Restart requested via /restart');
-        // Touch source file to trigger tsx watch restart; harmless under systemd
-        spawn('sh', ['-c', `sleep 1 && touch "${process.cwd()}/src/index.ts"`], {
-          detached: true,
-          stdio: 'ignore',
-        }).unref();
+        if (!process.env.INVOCATION_ID) {
+          // Not under systemd — self-restart by spawning a new process
+          const isDev = process.argv[1]?.endsWith('.ts');
+          const cmd = isDev ? 'npm run dev' : 'npm start';
+          spawn('sh', ['-c', `sleep 2 && ${cmd}`], {
+            detached: true,
+            stdio: 'ignore',
+            cwd: process.cwd(),
+          }).unref();
+        }
+        // Under systemd, Restart=always handles it
         process.exit(0);
       }, 500);
     });
