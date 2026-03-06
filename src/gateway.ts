@@ -1,10 +1,11 @@
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
-import type { Config, CronJobDef } from './types.js';
+import type { Config, CronJobDef, WebhookDef } from './types.js';
 import type { SessionManager } from './sessions.js';
 import type { Agent } from './agent.js';
 import type { Memory } from './memory.js';
 import type { CronScheduler } from './cron.js';
+import type { WebhookServer } from './webhook.js';
 
 export const MODELS: Record<string, string> = {
   'sonnet-4-5': 'claude-sonnet-4-5',
@@ -26,7 +27,9 @@ export class Gateway {
     text: string;
   }>>();
   private cronScheduler?: CronScheduler;
+  private webhookServer?: WebhookServer;
   private chatModels = new Map<string, string>();
+  private approvalEnabled = new Map<string, boolean>();
 
   constructor(
     private config: Config,
@@ -37,6 +40,20 @@ export class Gateway {
 
   setCronScheduler(scheduler: CronScheduler): void {
     this.cronScheduler = scheduler;
+  }
+
+  setWebhookServer(server: WebhookServer): void {
+    this.webhookServer = server;
+  }
+
+  toggleApproval(chatId: string): boolean {
+    const current = this.approvalEnabled.get(chatId) ?? false;
+    this.approvalEnabled.set(chatId, !current);
+    return !current;
+  }
+
+  getApproval(chatId: string): boolean {
+    return this.approvalEnabled.get(chatId) ?? false;
   }
 
   async handleMessage(chatId: string, text: string): Promise<string> {
@@ -107,5 +124,9 @@ export class Gateway {
 
   listCrons(): CronJobDef[] {
     return this.cronScheduler?.list() || [];
+  }
+
+  listWebhooks(): WebhookDef[] {
+    return this.webhookServer?.list() || [];
   }
 }

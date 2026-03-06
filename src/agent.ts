@@ -1,9 +1,19 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { readFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import path from 'path';
 import type { Config } from './types.js';
 import type { Memory } from './memory.js';
 
 const MAX_TURNS = 20;
 const SERVER_NAME = 'secret-agent-tools';
+
+interface ExternalMcpServer {
+  type: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
 
 export class Agent {
   constructor(
@@ -27,6 +37,18 @@ export class Agent {
     return parts.join('\n');
   }
 
+  private async loadExternalMcpServers(): Promise<Record<string, ExternalMcpServer>> {
+    const mcpPath = path.join(this.config.workspaceDir, 'mcp.json');
+    if (!existsSync(mcpPath)) return {};
+    try {
+      const content = await readFile(mcpPath, 'utf-8');
+      return JSON.parse(content);
+    } catch (err) {
+      console.error('[agent] Failed to load mcp.json:', err);
+      return {};
+    }
+  }
+
   async run(
     prompt: string,
     sessionId: string | undefined,
@@ -38,14 +60,23 @@ export class Agent {
     let resultText = '';
     let newSessionId = sessionId || '';
 
+    const externalServers = await this.loadExternalMcpServers();
+    const allowedTools: string[] = [`mcp__${SERVER_NAME}__*`, 'Read'];
+    const mcpServers: Record<string, unknown> = { [SERVER_NAME]: this.toolServer };
+
+    for (const [name, serverConfig] of Object.entries(externalServers)) {
+      allowedTools.push(`mcp__${name}__*`);
+      mcpServers[name] = serverConfig;
+    }
+
     const options: Record<string, unknown> = {
       systemPrompt: this.buildSystemPrompt(),
       model: model || this.config.model,
       maxTurns: MAX_TURNS,
-      allowedTools: [`mcp__${SERVER_NAME}__*`, 'Read'],
+      allowedTools,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
-      mcpServers: { [SERVER_NAME]: this.toolServer },
+      mcpServers,
     };
 
     if (sessionId) {

@@ -4,7 +4,7 @@ import type { Config } from '../types.js';
 
 const MAX_FILE_SIZE = 100_000;
 
-function resolveSafe(baseDir: string, filePath: string): string | null {
+export function resolveSafe(baseDir: string, filePath: string): string | null {
   const resolved = path.resolve(baseDir, filePath);
   if (!resolved.startsWith(path.resolve(baseDir))) return null;
   return resolved;

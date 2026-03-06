@@ -1,11 +1,18 @@
-import { Bot, type Context } from 'grammy';
+import { Bot, InlineKeyboard, InputFile, type Context } from 'grammy';
+import { randomUUID } from 'crypto';
 import type { Config } from './types.js';
 import { MODELS, MODEL_DISPLAY, type Gateway } from './gateway.js';
 
 const MAX_MESSAGE_LENGTH = 4096;
 
+interface PendingApproval {
+  resolve: (approved: boolean) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 export class TelegramAdapter {
   private bot: Bot;
+  private pendingApprovals = new Map<string, PendingApproval>();
 
   constructor(private config: Config, private gateway: Gateway) {
     this.bot = new Bot(config.telegramBotToken);
@@ -79,6 +86,54 @@ export class TelegramAdapter {
         ).join('\n');
         await this.sendLong(ctx, text);
       }
+    });
+
+    // /approve - toggle approval mode
+    this.bot.command('approve', async (ctx) => {
+      const chatId = ctx.chat.id.toString();
+      const enabled = this.gateway.toggleApproval(chatId);
+      await ctx.reply(enabled
+        ? 'Approval mode ON. Shell commands and file writes will require your confirmation.'
+        : 'Approval mode OFF. Commands will execute without confirmation.');
+    });
+
+    // /webhook - list webhooks
+    this.bot.command('webhook', async (ctx) => {
+      const hooks = this.gateway.listWebhooks();
+      if (hooks.length === 0) {
+        await ctx.reply('No webhooks configured. Ask me to set one up!');
+      } else {
+        const text = hooks.map(h =>
+          `- ${h.id}: \`${h.path}\` - ${h.prompt} (${h.secret ? 'signed' : 'unsigned'})`
+        ).join('\n');
+        await this.sendLong(ctx, text);
+      }
+    });
+
+    // Callback query handler for approval buttons
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery.data;
+      if (!data.startsWith('approve:')) return;
+
+      const parts = data.split(':');
+      if (parts.length !== 3) return;
+
+      const [, id, decision] = parts;
+      const pending = this.pendingApprovals.get(id);
+      if (!pending) {
+        await ctx.answerCallbackQuery({ text: 'Expired or already handled.' });
+        return;
+      }
+
+      clearTimeout(pending.timeout);
+      this.pendingApprovals.delete(id);
+      const approved = decision === 'yes';
+      pending.resolve(approved);
+
+      await ctx.answerCallbackQuery({ text: approved ? 'Approved' : 'Denied' });
+      await ctx.editMessageText(
+        ctx.callbackQuery.message?.text + `\n\n${approved ? '✅ Approved' : '❌ Denied'}`,
+      );
     });
 
     // Text messages
@@ -164,6 +219,32 @@ export class TelegramAdapter {
     for (const chunk of chunks) {
       await this.bot.api.sendMessage(Number(chatId), chunk);
     }
+  }
+
+  async sendFile(chatId: number | string, filePath: string, caption?: string): Promise<void> {
+    await this.bot.api.sendDocument(Number(chatId), new InputFile(filePath), {
+      caption: caption || undefined,
+    });
+  }
+
+  async requestApproval(chatId: number | string, description: string): Promise<boolean> {
+    const id = randomUUID().slice(0, 8);
+    const keyboard = new InlineKeyboard()
+      .text('Approve', `approve:${id}:yes`)
+      .text('Deny', `approve:${id}:no`);
+
+    await this.bot.api.sendMessage(Number(chatId), `🔒 Approval required:\n\n${description}`, {
+      reply_markup: keyboard,
+    });
+
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingApprovals.delete(id);
+        resolve(false);
+      }, 2 * 60 * 1000); // 2 minute timeout → auto-deny
+
+      this.pendingApprovals.set(id, { resolve, timeout });
+    });
   }
 }
 

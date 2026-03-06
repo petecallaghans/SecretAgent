@@ -6,6 +6,7 @@ export interface Config {
   workspaceDir: string;
   dataDir: string;
   shellAllowlist: string[];
+  webhookPort: number;
 }
 
 export interface CronJobDef {
@@ -14,6 +15,14 @@ export interface CronJobDef {
   prompt: string;
   chatId: number;
   enabled: boolean;
+}
+
+export interface WebhookDef {
+  id: string;
+  path: string;
+  prompt: string;
+  chatId: number;
+  secret?: string;
 }
 
 export function loadConfig(): Config {
@@ -32,6 +41,7 @@ export function loadConfig(): Config {
       .split(',')
       .map(s => s.trim())
       .filter(Boolean),
+    webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
   };
 }
 
