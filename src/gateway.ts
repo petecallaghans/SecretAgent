@@ -6,6 +6,18 @@ import type { Agent } from './agent.js';
 import type { Memory } from './memory.js';
 import type { CronScheduler } from './cron.js';
 
+export const MODELS: Record<string, string> = {
+  'sonnet-4-5': 'claude-sonnet-4-5',
+  'sonnet-4-6': 'claude-sonnet-4-6',
+  'opus-4-6': 'claude-opus-4-6',
+};
+
+export const MODEL_DISPLAY: Record<string, string> = {
+  'claude-sonnet-4-5': 'Sonnet 4.5',
+  'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-opus-4-6': 'Opus 4.6',
+};
+
 export class Gateway {
   private processing = new Set<string>();
   private queues = new Map<string, Array<{
@@ -14,6 +26,7 @@ export class Gateway {
     text: string;
   }>>();
   private cronScheduler?: CronScheduler;
+  private chatModels = new Map<string, string>();
 
   constructor(
     private config: Config,
@@ -56,11 +69,20 @@ export class Gateway {
 
   private async processMessage(chatId: string, text: string): Promise<string> {
     const sessionId = this.sessions.getSessionId(chatId);
-    const { response, sessionId: newSessionId } = await this.agent.run(text, sessionId, chatId);
+    const model = this.chatModels.get(chatId);
+    const { response, sessionId: newSessionId } = await this.agent.run(text, sessionId, chatId, model);
     if (newSessionId) {
       await this.sessions.setSessionId(chatId, newSessionId);
     }
     return response;
+  }
+
+  setModel(chatId: string, model: string): void {
+    this.chatModels.set(chatId, model);
+  }
+
+  getModel(chatId: string): string {
+    return this.chatModels.get(chatId) || this.config.model;
   }
 
   async handleImage(chatId: string, base64: string, caption: string): Promise<string> {

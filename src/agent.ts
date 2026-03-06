@@ -31,6 +31,7 @@ export class Agent {
     prompt: string,
     sessionId: string | undefined,
     chatId: string,
+    model?: string,
   ): Promise<{ response: string; sessionId: string }> {
     this.state.chatId = chatId;
 
@@ -39,7 +40,7 @@ export class Agent {
 
     const options: Record<string, unknown> = {
       systemPrompt: this.buildSystemPrompt(),
-      model: this.config.model,
+      model: model || this.config.model,
       maxTurns: MAX_TURNS,
       allowedTools: [`mcp__${SERVER_NAME}__*`, 'Read'],
       permissionMode: 'bypassPermissions',

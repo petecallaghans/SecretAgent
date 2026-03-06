@@ -1,6 +1,6 @@
 import { Bot, type Context } from 'grammy';
 import type { Config } from './types.js';
-import type { Gateway } from './gateway.js';
+import { MODELS, MODEL_DISPLAY, type Gateway } from './gateway.js';
 
 const MAX_MESSAGE_LENGTH = 4096;
 
@@ -38,6 +38,34 @@ export class TelegramAdapter {
     this.bot.command('memory', async (ctx) => {
       const memory = this.gateway.getMemory();
       await this.sendLong(ctx, memory || '(empty memory)');
+    });
+
+    // /model - view or switch model
+    this.bot.command('model', async (ctx) => {
+      const chatId = ctx.chat.id.toString();
+      const arg = ctx.match?.trim().toLowerCase();
+
+      if (!arg) {
+        const current = this.gateway.getModel(chatId);
+        const display = MODEL_DISPLAY[current] || current;
+        const available = Object.entries(MODEL_DISPLAY)
+          .map(([id, name]) => `  ${id === current ? '→' : ' '} ${name} (\`${id}\`)`)
+          .join('\n');
+        await ctx.reply(`Current model: ${display}\n\nAvailable:\n${available}\n\nSwitch with: /model <name>\nE.g. /model opus, /model sonnet-4-6`);
+        return;
+      }
+
+      const modelId = MODELS[arg] || (Object.values(MODELS).includes(arg) ? arg : null);
+      if (!modelId) {
+        const names = Object.keys(MODELS).join(', ');
+        await ctx.reply(`Unknown model. Options: ${names}`);
+        return;
+      }
+
+      this.gateway.setModel(chatId, modelId);
+      await this.gateway.resetSession(chatId);
+      const display = MODEL_DISPLAY[modelId] || modelId;
+      await ctx.reply(`Switched to ${display}. Session reset.`);
     });
 
     // /cron - list cron jobs
