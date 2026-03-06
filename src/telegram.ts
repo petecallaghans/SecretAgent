@@ -208,6 +208,57 @@ export class TelegramAdapter {
       }
     });
 
+    // Voice messages
+    this.bot.on('message:voice', async (ctx) => {
+      const chatId = ctx.chat.id.toString();
+      const caption = ctx.message.caption || undefined;
+
+      await ctx.replyWithChatAction('typing');
+      const typingInterval = setInterval(() => {
+        ctx.replyWithChatAction('typing').catch(() => {});
+      }, 4000);
+
+      try {
+        const file = await ctx.api.getFile(ctx.message.voice.file_id);
+        const url = `https://api.telegram.org/file/bot${this.config.telegramBotToken}/${file.file_path}`;
+        const response = await fetch(url);
+        const buffer = Buffer.from(await response.arrayBuffer());
+
+        const result = await this.gateway.handleVoice(chatId, buffer, caption);
+        clearInterval(typingInterval);
+        await this.sendLong(ctx, result || '(no response)');
+      } catch (err: unknown) {
+        clearInterval(typingInterval);
+        const msg = err instanceof Error ? err.message : String(err);
+        await ctx.reply(`Error: ${msg}`);
+      }
+    });
+
+    // Video notes (round video messages) — treat like voice
+    this.bot.on('message:video_note', async (ctx) => {
+      const chatId = ctx.chat.id.toString();
+
+      await ctx.replyWithChatAction('typing');
+      const typingInterval = setInterval(() => {
+        ctx.replyWithChatAction('typing').catch(() => {});
+      }, 4000);
+
+      try {
+        const file = await ctx.api.getFile(ctx.message.video_note.file_id);
+        const url = `https://api.telegram.org/file/bot${this.config.telegramBotToken}/${file.file_path}`;
+        const response = await fetch(url);
+        const buffer = Buffer.from(await response.arrayBuffer());
+
+        const result = await this.gateway.handleVoice(chatId, buffer);
+        clearInterval(typingInterval);
+        await this.sendLong(ctx, result || '(no response)');
+      } catch (err: unknown) {
+        clearInterval(typingInterval);
+        const msg = err instanceof Error ? err.message : String(err);
+        await ctx.reply(`Error: ${msg}`);
+      }
+    });
+
     // Error handler
     this.bot.catch((err) => {
       console.error('Telegram bot error:', err);

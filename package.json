@@ -15,15 +15,16 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.70",
+    "dotenv": "^16.4.7",
     "grammy": "^1.31.0",
     "node-cron": "^3.0.3",
-    "dotenv": "^16.4.7",
+    "openai": "^6.27.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "tsx": "^4.19.0",
     "@types/node": "^22.10.0",
-    "@types/node-cron": "^3.0.11"
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

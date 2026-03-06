@@ -7,6 +7,7 @@ export interface Config {
   dataDir: string;
   shellAllowlist: string[];
   webhookPort: number;
+  openaiApiKey: string;
 }
 
 export interface CronJobDef {
@@ -42,6 +43,7 @@ export function loadConfig(): Config {
       .map(s => s.trim())
       .filter(Boolean),
     webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
+    openaiApiKey: process.env.OPENAI_API_KEY || '',
   };
 }
 

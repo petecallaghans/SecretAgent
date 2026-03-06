@@ -1,5 +1,6 @@
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
+import OpenAI from 'openai';
 import type { Config, CronJobDef, WebhookDef } from './types.js';
 import type { SessionManager } from './sessions.js';
 import type { Agent } from './agent.js';
@@ -100,6 +101,22 @@ export class Gateway {
 
   getModel(chatId: string): string {
     return this.chatModels.get(chatId) || this.config.model;
+  }
+
+  async handleVoice(chatId: string, oggBuffer: Buffer, caption?: string): Promise<string> {
+    if (!this.config.openaiApiKey) {
+      return 'Voice notes require OPENAI_API_KEY to be set.';
+    }
+    const openai = new OpenAI({ apiKey: this.config.openaiApiKey });
+    const file = new File([new Uint8Array(oggBuffer)], 'voice.ogg', { type: 'audio/ogg' });
+    const { text: transcript } = await openai.audio.transcriptions.create({
+      model: 'whisper-1',
+      file,
+    });
+    const prompt = caption
+      ? `[Voice transcript] ${transcript}\n\n${caption}`
+      : `[Voice transcript] ${transcript}`;
+    return this.handleMessage(chatId, prompt);
   }
 
   async handleImage(chatId: string, base64: string, caption: string): Promise<string> {
