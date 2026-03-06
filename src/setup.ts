@@ -29,9 +29,17 @@ function commandExists(cmd: string): boolean {
   }
 }
 
+const ASCII_ART = `
+  ____                     _      _                    _
+ / ___|  ___  ___ _ __ ___| |_   / \\   __ _  ___ _ __ | |_
+ \\___ \\ / _ \\/ __| '__/ _ \\ __| / _ \\ / _\` |/ _ \\ '_ \\| __|
+  ___) |  __/ (__| | |  __/ |_ / ___ \\ (_| |  __/ | | | |_
+ |____/ \\___|\\___|\\_|  \\___|\\__/_/   \\_\\__, |\\___|_| |_|\\__|
+                                      |___/
+`;
+
 async function main(): Promise<void> {
-  print('\nSecretAgent Setup');
-  print('=================\n');
+  print(ASCII_ART);
 
   // Step 1: Claude Code Authentication
   printHeader('Step 1: Claude Code Authentication');
@@ -139,14 +147,50 @@ async function main(): Promise<void> {
   mkdirSync('data', { recursive: true });
   print('  ✓ workspace/ and data/ directories ready\n');
 
+  // Step 5: Background Service
+  printHeader('Step 5: Background Service');
+  print('Want to install SecretAgent as a background service?');
+  print('It will start automatically when your computer boots —');
+  print('no need to keep a terminal open.\n');
+
+  const serviceAnswer = await ask('  Install as background service? (Y/n): ');
+  const wantsService = serviceAnswer.toLowerCase() !== 'n';
+
+  let serviceInstalled = false;
+  if (wantsService) {
+    try {
+      print('');
+      execSync('npm run service install', { stdio: 'inherit', cwd: process.cwd() });
+      serviceInstalled = true;
+      print('\n  ✓ Service installed and running\n');
+    } catch {
+      print('\n  ⚠ Service install failed — you can try again later with: npm run service install\n');
+    }
+  } else {
+    print('  Skipped\n');
+  }
+
   rl.close();
 
   print('━'.repeat(40));
-  print('\n  Setup complete!\n');
-  print('  Next steps:');
-  print('    npm run dev     # start the bot');
-  print('    Message your bot on Telegram');
-  print('    It will walk you through personalizing it\n');
+
+  if (serviceInstalled) {
+    print('\n  Setup complete! Your bot is running.\n');
+    print('  Message your bot on Telegram — it will');
+    print('  walk you through personalizing it.\n');
+    print('  Useful commands:');
+    print('    npm run service status   # check if running');
+    print('    npm run service logs     # view logs');
+    print('    npm run service stop     # stop the bot');
+    print('    npm run service restart  # restart\n');
+  } else {
+    print('\n  Setup complete!\n');
+    print('  Next steps:');
+    print('    npm run dev              # start the bot (dev mode)');
+    print('    npm run service install  # or install as background service');
+    print('    Message your bot on Telegram');
+    print('    It will walk you through personalizing it\n');
+  }
 }
 
 main().catch((err) => {
