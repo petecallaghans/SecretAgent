@@ -97,6 +97,15 @@ export class TelegramAdapter {
         : 'Approval mode OFF. Commands will execute without confirmation.');
     });
 
+    // /restart - restart the bot process
+    this.bot.command('restart', async (ctx) => {
+      await ctx.reply('Restarting…');
+      setTimeout(() => {
+        console.log('[telegram] Restart requested via /restart');
+        process.exit(0);
+      }, 500);
+    });
+
     // /webhook - list webhooks
     this.bot.command('webhook', async (ctx) => {
       const hooks = this.gateway.listWebhooks();
