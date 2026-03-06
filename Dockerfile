@@ -1,0 +1,19 @@
+FROM node:22-slim AS builder
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install
+COPY tsconfig.json ./
+COPY src/ ./src/
+RUN npx tsc
+
+FROM node:22-slim
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY package.json ./
+
+VOLUME ["/app/workspace", "/app/data"]
+
+ENV NODE_ENV=production
+
+CMD ["node", "dist/index.js"]

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+data/
+workspace/memory.md
+workspace/tmp/
+.DS_Store

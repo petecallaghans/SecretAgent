@@ -1,0 +1,26 @@
+{
+  "name": "secret-agent",
+  "version": "1.0.0",
+  "description": "Lightweight AI agent with Telegram interface",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "setup": "tsx src/setup.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.70",
+    "grammy": "^1.31.0",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.7",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11"
+  }
+}
