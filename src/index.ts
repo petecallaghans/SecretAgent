@@ -1,15 +1,3 @@
-import { existsSync } from 'fs';
-import { execSync } from 'child_process';
-
-if (!existsSync('.env')) {
-  console.log('No .env found — running setup wizard...\n');
-  execSync('npx tsx src/setup.ts', { stdio: 'inherit' });
-  if (!existsSync('.env')) {
-    console.error('Setup did not create .env. Exiting.');
-    process.exit(1);
-  }
-}
-
 import 'dotenv/config';
 // Allow running inside a Claude Code session (e.g. during development)
 delete process.env.CLAUDECODE;
