@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import path from 'path';
 import type { Config } from './types.js';
 import type { Memory } from './memory.js';
@@ -15,7 +15,12 @@ interface ExternalMcpServer {
   env?: Record<string, string>;
 }
 
+export type StreamCallback = (textDelta: string) => void;
+
 export class Agent {
+  private externalMcpCache: Record<string, ExternalMcpServer> | null = null;
+  private externalMcpMtime = 0;
+
   constructor(
     private config: Config,
     private memory: Memory,
@@ -44,8 +49,15 @@ export class Agent {
     const mcpPath = path.join(this.config.workspaceDir, 'mcp.json');
     if (!existsSync(mcpPath)) return {};
     try {
+      // Only re-read if file has changed
+      const mtime = statSync(mcpPath).mtimeMs;
+      if (this.externalMcpCache && mtime === this.externalMcpMtime) {
+        return this.externalMcpCache;
+      }
       const content = await readFile(mcpPath, 'utf-8');
-      return JSON.parse(content);
+      this.externalMcpCache = JSON.parse(content);
+      this.externalMcpMtime = mtime;
+      return this.externalMcpCache!;
     } catch (err) {
       console.error('[agent] Failed to load mcp.json:', err);
       return {};
@@ -57,6 +69,7 @@ export class Agent {
     sessionId: string | undefined,
     chatId: string,
     model?: string,
+    onStream?: StreamCallback,
   ): Promise<{ response: string; sessionId: string }> {
     this.state.chatId = chatId;
 
@@ -80,6 +93,7 @@ export class Agent {
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       mcpServers,
+      includePartialMessages: !!onStream,
     };
 
     if (sessionId) {
@@ -89,11 +103,19 @@ export class Agent {
     try {
       for await (const message of query({ prompt, options: options as any })) {
         const msg = message as Record<string, unknown>;
-        console.log('[agent] message:', JSON.stringify(msg).slice(0, 500));
         if (msg.type === 'system' && msg.subtype === 'init') {
           newSessionId = msg.session_id as string;
-        }
-        if ('result' in msg) {
+          console.log('[agent] session:', newSessionId);
+        } else if (msg.type === 'stream_event' && onStream) {
+          // Extract text deltas from streaming events
+          const event = msg.event as Record<string, unknown> | undefined;
+          if (event?.type === 'content_block_delta') {
+            const delta = event.delta as Record<string, unknown> | undefined;
+            if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+              onStream(delta.text);
+            }
+          }
+        } else if ('result' in msg) {
           resultText = msg.result as string;
         }
       }

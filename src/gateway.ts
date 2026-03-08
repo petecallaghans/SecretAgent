@@ -3,7 +3,7 @@ import path from 'path';
 import OpenAI from 'openai';
 import type { Config, CronJobDef, WebhookDef } from './types.js';
 import type { SessionManager } from './sessions.js';
-import type { Agent } from './agent.js';
+import type { Agent, StreamCallback } from './agent.js';
 import type { Memory } from './memory.js';
 import type { CronScheduler } from './cron.js';
 import type { WebhookServer } from './webhook.js';
@@ -57,7 +57,7 @@ export class Gateway {
     return this.approvalEnabled.get(chatId) ?? false;
   }
 
-  async handleMessage(chatId: string, text: string): Promise<string> {
+  async handleMessage(chatId: string, text: string, onStream?: StreamCallback): Promise<string> {
     // Queue if already processing for this session
     if (this.processing.has(chatId)) {
       return new Promise((resolve, reject) => {
@@ -72,7 +72,7 @@ export class Gateway {
 
     this.processing.add(chatId);
     try {
-      return await this.processMessage(chatId, text);
+      return await this.processMessage(chatId, text, onStream);
     } finally {
       this.processing.delete(chatId);
       // Process next queued message
@@ -85,10 +85,10 @@ export class Gateway {
     }
   }
 
-  private async processMessage(chatId: string, text: string): Promise<string> {
+  private async processMessage(chatId: string, text: string, onStream?: StreamCallback): Promise<string> {
     const sessionId = this.sessions.getSessionId(chatId);
     const model = this.chatModels.get(chatId);
-    const { response, sessionId: newSessionId } = await this.agent.run(text, sessionId, chatId, model);
+    const { response, sessionId: newSessionId } = await this.agent.run(text, sessionId, chatId, model, onStream);
     if (newSessionId) {
       await this.sessions.setSessionId(chatId, newSessionId);
     }
