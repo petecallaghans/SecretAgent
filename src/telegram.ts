@@ -253,12 +253,15 @@ export class TelegramAdapter {
         };
 
         // Send initial placeholder as soon as first visible content arrives
+        let initSending = false;
         const onStreamWithInit = async (delta: string) => {
           streamedText += delta;
           if (!stream.active) {
+            if (initSending) return; // already sending placeholder
             // Only send placeholder once we have visible (non-thinking) content
             const display = stripThinking(streamedText);
             if (!display) return;
+            initSending = true;
             const sent = await ctx.reply('▍');
             stream.chatId = sent.chat.id;
             stream.messageId = sent.message_id;
