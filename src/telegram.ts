@@ -1,8 +1,8 @@
 import { Bot, InlineKeyboard, InputFile, type Context } from 'grammy';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
-import type { Config } from './types.js';
-import { MODELS, MODEL_DISPLAY, type Gateway } from './gateway.js';
+import type { Config, Effort } from './types.js';
+import { MODELS, MODEL_DISPLAY, EFFORT_LEVELS, type Gateway } from './gateway.js';
 
 const MAX_MESSAGE_LENGTH = 4096;
 
@@ -87,6 +87,36 @@ export class TelegramAdapter {
         ).join('\n');
         await this.sendLong(ctx, text);
       }
+    });
+
+    // /effort - view or set effort level
+    this.bot.command('effort', async (ctx) => {
+      const arg = ctx.match?.trim().toLowerCase() as Effort | undefined;
+      const current = this.gateway.getEffort();
+
+      if (!arg) {
+        const levels = EFFORT_LEVELS
+          .map(l => `  ${l === current ? '→' : ' '} ${l}`)
+          .join('\n');
+        await ctx.reply(`Effort: ${current}\n\nLevels:\n${levels}\n\nSwitch: /effort <level>`);
+        return;
+      }
+
+      if (!EFFORT_LEVELS.includes(arg as Effort)) {
+        await ctx.reply(`Unknown level. Options: ${EFFORT_LEVELS.join(', ')}`);
+        return;
+      }
+
+      this.gateway.setEffort(arg as Effort);
+      await ctx.reply(`Effort set to ${arg}.`);
+    });
+
+    // /think - toggle extended thinking
+    this.bot.command('think', async (ctx) => {
+      const current = this.gateway.getThinking();
+      const next = current === 'disabled' ? 'adaptive' : 'disabled';
+      this.gateway.setThinking(next);
+      await ctx.reply(`Thinking: ${next === 'adaptive' ? 'ON (adaptive)' : 'OFF'}`);
     });
 
     // /approve - toggle approval mode

@@ -1,4 +1,5 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, type SpawnOptions, type SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
+import { spawn } from 'child_process';
 import { readFile } from 'fs/promises';
 import { existsSync, statSync } from 'fs';
 import path from 'path';
@@ -17,9 +18,87 @@ interface ExternalMcpServer {
 
 export type StreamCallback = (textDelta: string) => void;
 
+/**
+ * Pre-warms Claude Code processes to eliminate subprocess startup latency.
+ * Spawns a process in advance and hands it to the SDK when query() requests one.
+ */
+class ProcessPool {
+  private warm: { process: ReturnType<typeof spawn>; spawnOpts?: SpawnOptions } | null = null;
+  private lastCommand: string | null = null;
+  private lastArgs: string[] | null = null;
+
+  /**
+   * Pre-spawn a process using the command/args from the last query.
+   * Called after each query completes so the next one is ready immediately.
+   */
+  prewarm(opts: SpawnOptions): void {
+    if (this.warm) return; // already warm
+    this.lastCommand = opts.command;
+    this.lastArgs = [...opts.args];
+    try {
+      const child = spawn(opts.command, opts.args, {
+        cwd: opts.cwd,
+        env: opts.env as NodeJS.ProcessEnv,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      this.warm = { process: child, spawnOpts: opts };
+      child.on('exit', () => {
+        if (this.warm?.process === child) this.warm = null;
+      });
+      child.on('error', () => {
+        if (this.warm?.process === child) this.warm = null;
+      });
+      console.log('[pool] Pre-warmed process spawned');
+    } catch {
+      this.warm = null;
+    }
+  }
+
+  /**
+   * Called by the SDK via spawnClaudeCodeProcess. Returns a pre-warmed process
+   * if available, otherwise spawns a fresh one and saves opts for next prewarm.
+   */
+  acquire(opts: SpawnOptions): SpawnedProcess {
+    this.lastCommand = opts.command;
+    this.lastArgs = [...opts.args];
+
+    if (this.warm) {
+      console.log('[pool] Reusing pre-warmed process');
+      const child = this.warm.process;
+      this.warm = null;
+      return child as unknown as SpawnedProcess;
+    }
+
+    console.log('[pool] Cold spawn (no pre-warmed process available)');
+    const child = spawn(opts.command, opts.args, {
+      cwd: opts.cwd,
+      env: opts.env as NodeJS.ProcessEnv,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return child as unknown as SpawnedProcess;
+  }
+
+  /**
+   * Schedule a prewarm using the last seen spawn options.
+   */
+  schedulePrewarm(opts: SpawnOptions): void {
+    // Small delay to let the previous process fully clean up
+    setTimeout(() => this.prewarm(opts), 100);
+  }
+
+  dispose(): void {
+    if (this.warm) {
+      this.warm.process.kill('SIGTERM');
+      this.warm = null;
+    }
+  }
+}
+
 export class Agent {
   private externalMcpCache: Record<string, ExternalMcpServer> | null = null;
   private externalMcpMtime = 0;
+  private pool = new ProcessPool();
+  private lastSpawnOpts: SpawnOptions | null = null;
 
   constructor(
     private config: Config,
@@ -85,6 +164,11 @@ export class Agent {
       mcpServers[name] = serverConfig;
     }
 
+    // Build thinking config from settings
+    const thinking = this.config.thinking === 'disabled'
+      ? { type: 'disabled' as const }
+      : { type: 'adaptive' as const };
+
     const options: Record<string, unknown> = {
       systemPrompt: await this.buildSystemPrompt(),
       model: model || this.config.model,
@@ -94,6 +178,12 @@ export class Agent {
       allowDangerouslySkipPermissions: true,
       mcpServers,
       includePartialMessages: !!onStream,
+      effort: this.config.effort,
+      thinking,
+      spawnClaudeCodeProcess: (opts: SpawnOptions) => {
+        this.lastSpawnOpts = opts;
+        return this.pool.acquire(opts);
+      },
     };
 
     if (sessionId) {
@@ -122,6 +212,11 @@ export class Agent {
     } catch (err) {
       console.error('[agent] query() error:', err);
       throw err;
+    }
+
+    // Pre-warm next process after query completes
+    if (this.lastSpawnOpts) {
+      this.pool.schedulePrewarm(this.lastSpawnOpts);
     }
 
     return { response: resultText, sessionId: newSessionId };
