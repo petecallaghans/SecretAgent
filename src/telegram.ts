@@ -168,9 +168,75 @@ export class TelegramAdapter {
       }, 4000);
 
       try {
-        const response = await this.gateway.handleMessage(chatId, text);
+        // Stream response: send a placeholder message, then edit it as content arrives
+        let streamedText = '';
+        const stream = { chatId: 0, messageId: 0, active: false };
+        let lastEditTime = 0;
+        let editPending = false;
+        const EDIT_INTERVAL_MS = 1500; // Telegram rate limits edits
+
+        const flushEdit = async () => {
+          if (!stream.active || !streamedText) return;
+          const truncated = streamedText.length > MAX_MESSAGE_LENGTH
+            ? streamedText.slice(0, MAX_MESSAGE_LENGTH - 3) + '...'
+            : streamedText;
+          try {
+            await this.bot.api.editMessageText(
+              stream.chatId,
+              stream.messageId,
+              truncated + ' ▍',
+            );
+            lastEditTime = Date.now();
+          } catch {
+            // Telegram may reject edits if content unchanged or rate limited
+          }
+          editPending = false;
+        };
+
+        const onStream = (delta: string) => {
+          streamedText += delta;
+          const now = Date.now();
+          if (!stream.active || editPending) return;
+          if (now - lastEditTime >= EDIT_INTERVAL_MS) {
+            editPending = true;
+            flushEdit();
+          }
+        };
+
+        // Send initial placeholder as soon as first content arrives
+        const onStreamWithInit = async (delta: string) => {
+          if (!stream.active) {
+            const sent = await ctx.reply('▍');
+            stream.chatId = sent.chat.id;
+            stream.messageId = sent.message_id;
+            stream.active = true;
+            lastEditTime = Date.now();
+          }
+          onStream(delta);
+        };
+
+        const response = await this.gateway.handleMessage(chatId, text, onStreamWithInit);
         clearInterval(typingInterval);
-        await this.sendLong(ctx, response || '(no response)');
+
+        // Final update: replace streamed message or send fresh
+        if (stream.active) {
+          const finalText = response || '(no response)';
+          if (finalText.length <= MAX_MESSAGE_LENGTH) {
+            try {
+              await this.bot.api.editMessageText(stream.chatId, stream.messageId, finalText);
+            } catch {
+              await this.sendLong(ctx, finalText);
+            }
+          } else {
+            // Response too long for single message — delete placeholder and send chunks
+            try {
+              await this.bot.api.deleteMessage(stream.chatId, stream.messageId);
+            } catch { /* ignore */ }
+            await this.sendLong(ctx, finalText);
+          }
+        } else {
+          await this.sendLong(ctx, response || '(no response)');
+        }
       } catch (err: unknown) {
         clearInterval(typingInterval);
         const msg = err instanceof Error ? err.message : String(err);
