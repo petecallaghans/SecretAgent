@@ -299,7 +299,15 @@ const linuxHandlers = {
     ok('Service installed, enabled, and started');
 
     if (!isRoot()) {
-      info('Tip: run `loginctl enable-linger` to keep user services running after logout.');
+      // Enable linger so user services survive logout on headless servers
+      const linger = spawnSync('loginctl', ['enable-linger', os.userInfo().username], {
+        encoding: 'utf-8', stdio: 'pipe',
+      });
+      if (linger.status === 0) {
+        ok('Linger enabled — service will survive logout');
+      } else {
+        info('Tip: run `loginctl enable-linger` to keep the service running after logout.');
+      }
     }
   },
 
