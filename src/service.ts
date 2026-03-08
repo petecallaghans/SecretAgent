@@ -242,7 +242,15 @@ function systemdUnitPath(): string {
   return path.join(configDir, `${SYSTEMD_UNIT}.service`);
 }
 
+function ensureDbusAddress(): void {
+  if (!isRoot() && !process.env.DBUS_SESSION_BUS_ADDRESS) {
+    const uid = process.getuid?.() ?? run('id -u', { silent: true });
+    process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=/run/user/${uid}/bus`;
+  }
+}
+
 function systemctl(...args: string[]): string {
+  ensureDbusAddress();
   const userFlag = isRoot() ? [] : ['--user'];
   const result = spawnSync('systemctl', [...userFlag, ...args], { encoding: 'utf-8', stdio: 'pipe' });
   return result.stdout?.trim() ?? '';
