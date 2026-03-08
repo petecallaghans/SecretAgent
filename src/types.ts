@@ -1,3 +1,6 @@
+export type Effort = 'low' | 'medium' | 'high' | 'max';
+export type ThinkingMode = 'adaptive' | 'disabled';
+
 export interface Config {
   telegramBotToken: string;
   allowedUsers: number[];
@@ -8,6 +11,8 @@ export interface Config {
   shellAllowlist: string[];
   webhookPort: number;
   openaiApiKey: string;
+  effort: Effort;
+  thinking: ThinkingMode;
 }
 
 export interface CronJobDef {
@@ -44,6 +49,8 @@ export function loadConfig(): Config {
       .filter(Boolean),
     webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
     openaiApiKey: process.env.OPENAI_API_KEY || '',
+    effort: (process.env.EFFORT as Effort) || 'low',
+    thinking: (process.env.THINKING as ThinkingMode) || 'disabled',
   };
 }
 

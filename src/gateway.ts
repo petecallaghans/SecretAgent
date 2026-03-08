@@ -8,6 +8,8 @@ import type { Memory } from './memory.js';
 import type { CronScheduler } from './cron.js';
 import type { WebhookServer } from './webhook.js';
 
+import type { Effort, ThinkingMode } from './types.js';
+
 export const MODELS: Record<string, string> = {
   'sonnet-4-5': 'claude-sonnet-4-5',
   'sonnet-4-6': 'claude-sonnet-4-6',
@@ -19,6 +21,8 @@ export const MODEL_DISPLAY: Record<string, string> = {
   'claude-sonnet-4-6': 'Sonnet 4.6',
   'claude-opus-4-6': 'Opus 4.6',
 };
+
+export const EFFORT_LEVELS: Effort[] = ['low', 'medium', 'high', 'max'];
 
 export class Gateway {
   private processing = new Set<string>();
@@ -101,6 +105,22 @@ export class Gateway {
 
   getModel(chatId: string): string {
     return this.chatModels.get(chatId) || this.config.model;
+  }
+
+  setEffort(effort: Effort): void {
+    this.config.effort = effort;
+  }
+
+  getEffort(): Effort {
+    return this.config.effort;
+  }
+
+  setThinking(mode: ThinkingMode): void {
+    this.config.thinking = mode;
+  }
+
+  getThinking(): ThinkingMode {
+    return this.config.thinking;
   }
 
   async handleVoice(chatId: string, oggBuffer: Buffer, caption?: string): Promise<string> {
