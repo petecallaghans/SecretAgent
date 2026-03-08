@@ -6,6 +6,17 @@ import { MODELS, MODEL_DISPLAY, EFFORT_LEVELS, type Gateway } from './gateway.js
 
 const MAX_MESSAGE_LENGTH = 4096;
 
+/** Strip <thinking>...</thinking> blocks from text, including unclosed trailing blocks */
+function stripThinking(text: string): string {
+  let result = text.replace(/<thinking>[\s\S]*?<\/thinking>\s*/g, '');
+  // Hide unclosed thinking block at end (still streaming)
+  const openIdx = result.lastIndexOf('<thinking>');
+  if (openIdx !== -1 && result.indexOf('</thinking>', openIdx) === -1) {
+    result = result.slice(0, openIdx);
+  }
+  return result.trimStart();
+}
+
 interface PendingApproval {
   resolve: (approved: boolean) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -200,57 +211,73 @@ export class TelegramAdapter {
       try {
         // Stream response: send a placeholder message, then edit it as content arrives
         let streamedText = '';
+        let displayedText = '';
         const stream = { chatId: 0, messageId: 0, active: false };
-        let lastEditTime = 0;
-        let editPending = false;
-        const EDIT_INTERVAL_MS = 1500; // Telegram rate limits edits
+        let editTimer: ReturnType<typeof setTimeout> | null = null;
+        const EDIT_INTERVAL_MS = 1000; // Telegram allows ~1 edit/sec
 
         const flushEdit = async () => {
-          if (!stream.active || !streamedText) return;
-          const truncated = streamedText.length > MAX_MESSAGE_LENGTH
-            ? streamedText.slice(0, MAX_MESSAGE_LENGTH - 3) + '...'
-            : streamedText;
+          editTimer = null;
+          if (!stream.active) return;
+          const display = stripThinking(streamedText);
+          if (!display || display === displayedText) return;
+          const truncated = display.length > MAX_MESSAGE_LENGTH
+            ? display.slice(0, MAX_MESSAGE_LENGTH - 3) + '...'
+            : display;
           try {
             await this.bot.api.editMessageText(
               stream.chatId,
               stream.messageId,
               truncated + ' ▍',
             );
-            lastEditTime = Date.now();
+            displayedText = display;
           } catch {
             // Telegram may reject edits if content unchanged or rate limited
           }
-          editPending = false;
+          // If more content arrived during flush, schedule another edit
+          const latest = stripThinking(streamedText);
+          if (latest !== displayedText && !editTimer) {
+            editTimer = setTimeout(flushEdit, EDIT_INTERVAL_MS);
+          }
+        };
+
+        const scheduleEdit = () => {
+          if (editTimer) return;
+          editTimer = setTimeout(flushEdit, EDIT_INTERVAL_MS);
         };
 
         const onStream = (delta: string) => {
           streamedText += delta;
-          const now = Date.now();
-          if (!stream.active || editPending) return;
-          if (now - lastEditTime >= EDIT_INTERVAL_MS) {
-            editPending = true;
-            flushEdit();
-          }
+          if (!stream.active) return;
+          scheduleEdit();
         };
 
-        // Send initial placeholder as soon as first content arrives
+        // Send initial placeholder as soon as first visible content arrives
         const onStreamWithInit = async (delta: string) => {
+          streamedText += delta;
           if (!stream.active) {
+            // Only send placeholder once we have visible (non-thinking) content
+            const display = stripThinking(streamedText);
+            if (!display) return;
             const sent = await ctx.reply('▍');
             stream.chatId = sent.chat.id;
             stream.messageId = sent.message_id;
             stream.active = true;
-            lastEditTime = Date.now();
+            scheduleEdit();
+            return;
           }
-          onStream(delta);
+          scheduleEdit();
         };
 
         const response = await this.gateway.handleMessage(chatId, text, onStreamWithInit);
         clearInterval(typingInterval);
+        if (editTimer) clearTimeout(editTimer);
+
+        // Strip thinking from final response too
+        const finalText = stripThinking(response || '') || '(no response)';
 
         // Final update: replace streamed message or send fresh
         if (stream.active) {
-          const finalText = response || '(no response)';
           if (finalText.length <= MAX_MESSAGE_LENGTH) {
             try {
               await this.bot.api.editMessageText(stream.chatId, stream.messageId, finalText);
@@ -265,7 +292,7 @@ export class TelegramAdapter {
             await this.sendLong(ctx, finalText);
           }
         } else {
-          await this.sendLong(ctx, response || '(no response)');
+          await this.sendLong(ctx, finalText);
         }
       } catch (err: unknown) {
         clearInterval(typingInterval);
