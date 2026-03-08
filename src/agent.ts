@@ -6,8 +6,23 @@ import path from 'path';
 import type { Config } from './types.js';
 import type { Memory } from './memory.js';
 
-const MAX_TURNS = 20;
 const SERVER_NAME = 'secret-agent-tools';
+
+/** Scale maxTurns by effort — simple chats shouldn't loop through many tool calls */
+const EFFORT_MAX_TURNS: Record<string, number> = {
+  low: 5,
+  medium: 10,
+  high: 20,
+  max: 30,
+};
+
+/** Scale maxTokens by effort — shorter responses for simple exchanges */
+const EFFORT_MAX_TOKENS: Record<string, number> = {
+  low: 2048,
+  medium: 4096,
+  high: 8192,
+  max: 16384,
+};
 
 interface ExternalMcpServer {
   type: string;
@@ -99,6 +114,8 @@ export class Agent {
   private externalMcpMtime = 0;
   private pool = new ProcessPool();
   private lastSpawnOpts: SpawnOptions | null = null;
+  private cachedSystemPrompt = '';
+  private systemPromptExpiry = 0;
 
   constructor(
     private config: Config,
@@ -108,6 +125,12 @@ export class Agent {
   ) {}
 
   private async buildSystemPrompt(): Promise<string> {
+    const now = Date.now();
+    // Cache system prompt for 30s — avoids re-reading log files every message
+    if (this.cachedSystemPrompt && now < this.systemPromptExpiry) {
+      return this.cachedSystemPrompt;
+    }
+
     const parts: string[] = [];
 
     const soul = this.memory.getSoul();
@@ -121,7 +144,9 @@ export class Agent {
 
     parts.push(`\nCurrent date/time: ${new Date().toISOString()}`);
 
-    return parts.join('\n');
+    this.cachedSystemPrompt = parts.join('\n');
+    this.systemPromptExpiry = now + 30_000;
+    return this.cachedSystemPrompt;
   }
 
   private async loadExternalMcpServers(): Promise<Record<string, ExternalMcpServer>> {
@@ -169,16 +194,24 @@ export class Agent {
       ? { type: 'disabled' as const }
       : { type: 'adaptive' as const };
 
+    const effort = this.config.effort;
+    const maxTurns = EFFORT_MAX_TURNS[effort] ?? 10;
+    const maxTokens = Math.min(
+      EFFORT_MAX_TOKENS[effort] ?? 4096,
+      this.config.maxTokens,
+    );
+
     const options: Record<string, unknown> = {
       systemPrompt: await this.buildSystemPrompt(),
       model: model || this.config.model,
-      maxTurns: MAX_TURNS,
+      maxTurns,
+      maxTokens,
       allowedTools,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       mcpServers,
       includePartialMessages: !!onStream,
-      effort: this.config.effort,
+      effort,
       thinking,
       spawnClaudeCodeProcess: (opts: SpawnOptions) => {
         this.lastSpawnOpts = opts;
