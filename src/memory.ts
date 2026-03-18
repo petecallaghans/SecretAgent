@@ -6,13 +6,16 @@ import type { Config } from './types.js';
 export class Memory {
   private soulContent = '';
   private memoryContent = '';
+  private toolsContent = '';
   private soulPath: string;
   private memoryPath: string;
+  private toolsPath: string;
   private logDir: string;
 
   constructor(private config: Config) {
     this.soulPath = path.join(config.workspaceDir, 'soul.md');
     this.memoryPath = path.join(config.workspaceDir, 'memory.md');
+    this.toolsPath = path.join(config.workspaceDir, 'tools.md');
     this.logDir = path.join(config.workspaceDir, 'memory');
   }
 
@@ -30,6 +33,9 @@ export class Memory {
     this.memoryContent = existsSync(this.memoryPath)
       ? await readFile(this.memoryPath, 'utf-8')
       : '';
+    this.toolsContent = existsSync(this.toolsPath)
+      ? await readFile(this.toolsPath, 'utf-8')
+      : '';
   }
 
   getSoul(): string {
@@ -38,6 +44,10 @@ export class Memory {
 
   getMemory(): string {
     return this.memoryContent;
+  }
+
+  getTools(): string {
+    return this.toolsContent;
   }
 
   async saveMemory(content: string): Promise<void> {
