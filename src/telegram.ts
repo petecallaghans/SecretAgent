@@ -489,6 +489,10 @@ function formatForTelegram(text: string): string {
     return `<code>${code}</code>`;
   });
 
+  // Headings: # ... → bold text (Telegram has no heading support)
+  html = html.replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>');
+  // Horizontal rules: --- or *** or ___ on their own line → blank line
+  html = html.replace(/^[-*_]{3,}\s*$/gm, '');
   // Bold: **...** → <b>...</b>
   html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
   // Italic: *...* → <i>...</i>
