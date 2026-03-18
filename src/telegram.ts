@@ -225,10 +225,12 @@ export class TelegramAdapter {
             ? display.slice(0, MAX_MESSAGE_LENGTH - 3) + '...'
             : display;
           try {
+            const streamHtml = formatForTelegram(truncated);
             await this.bot.api.editMessageText(
               stream.chatId,
               stream.messageId,
-              truncated + ' ▍',
+              streamHtml + ' ▍',
+              { parse_mode: 'HTML' },
             );
             displayedText = display;
           } catch {
@@ -281,9 +283,10 @@ export class TelegramAdapter {
 
         // Final update: replace streamed message or send fresh
         if (stream.active) {
-          if (finalText.length <= MAX_MESSAGE_LENGTH) {
+          const finalHtml = formatForTelegram(finalText);
+          if (finalHtml.length <= MAX_MESSAGE_LENGTH) {
             try {
-              await this.bot.api.editMessageText(stream.chatId, stream.messageId, finalText);
+              await this.bot.api.editMessageText(stream.chatId, stream.messageId, finalHtml, { parse_mode: 'HTML' });
             } catch {
               await this.sendLong(ctx, finalText);
             }
@@ -392,9 +395,15 @@ export class TelegramAdapter {
   }
 
   private async sendLong(ctx: Context, text: string): Promise<void> {
-    const chunks = splitMessage(text);
+    const html = formatForTelegram(text);
+    const chunks = splitMessage(html);
     for (const chunk of chunks) {
-      await ctx.reply(chunk);
+      try {
+        await ctx.reply(chunk, { parse_mode: 'HTML' });
+      } catch {
+        // Fallback to plain text if HTML parsing fails
+        await ctx.reply(text.slice(0, MAX_MESSAGE_LENGTH));
+      }
     }
   }
 
@@ -413,9 +422,14 @@ export class TelegramAdapter {
   }
 
   async sendMessage(chatId: number | string, text: string): Promise<void> {
-    const chunks = splitMessage(text);
+    const html = formatForTelegram(text);
+    const chunks = splitMessage(html);
     for (const chunk of chunks) {
-      await this.bot.api.sendMessage(Number(chatId), chunk);
+      try {
+        await this.bot.api.sendMessage(Number(chatId), chunk, { parse_mode: 'HTML' });
+      } catch {
+        await this.bot.api.sendMessage(Number(chatId), text.slice(0, MAX_MESSAGE_LENGTH));
+      }
     }
   }
 
@@ -444,6 +458,45 @@ export class TelegramAdapter {
       this.pendingApprovals.set(id, { resolve, timeout });
     });
   }
+}
+
+/** Convert Markdown to Telegram-safe HTML */
+function formatForTelegram(text: string): string {
+  // Escape HTML first, then apply markdown conversion
+  let html = text;
+  // Protect code blocks from escaping
+  const codeBlocks: string[] = [];
+  html = html.replace(/```\w*\n([\s\S]*?)```/g, (_, code) => {
+    codeBlocks.push(code);
+    return `\x00CODEBLOCK${codeBlocks.length - 1}\x00`;
+  });
+  const inlineCodes: string[] = [];
+  html = html.replace(/`([^`]+)`/g, (_, code) => {
+    inlineCodes.push(code);
+    return `\x00INLINE${inlineCodes.length - 1}\x00`;
+  });
+
+  // Escape HTML
+  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Restore code blocks as HTML
+  html = html.replace(/\x00CODEBLOCK(\d+)\x00/g, (_, idx) => {
+    const code = codeBlocks[Number(idx)].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<pre><code>${code}</code></pre>`;
+  });
+  html = html.replace(/\x00INLINE(\d+)\x00/g, (_, idx) => {
+    const code = inlineCodes[Number(idx)].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<code>${code}</code>`;
+  });
+
+  // Bold: **...** → <b>...</b>
+  html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  // Italic: *...* → <i>...</i>
+  html = html.replace(/(?<!\w)\*([^*]+?)\*(?!\w)/g, '<i>$1</i>');
+  // Strikethrough: ~~...~~ → <s>...</s>
+  html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+  return html;
 }
 
 function splitMessage(text: string): string[] {
