@@ -12,11 +12,17 @@ export async function executeShell(command: string, config: Config): Promise<str
     }
   }
 
+  // Ensure ~/.local/bin is on PATH for user-installed tools
+  const env = { ...process.env };
+  const localBin = `${process.env.HOME || '/root'}/.local/bin`;
+  env.PATH = env.PATH ? `${localBin}:${env.PATH}` : localBin;
+
   return new Promise((resolve) => {
     exec(command, {
       timeout: DEFAULT_TIMEOUT,
       maxBuffer: 1024 * 1024,
       shell: '/bin/bash',
+      env,
     }, (error, stdout, stderr) => {
       let output = '';
       if (stdout) output += stdout;

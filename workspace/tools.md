@@ -4,6 +4,10 @@ You have the following tools available in every session. Use them freely — do 
 
 ## Shell & System
 - **shell** — Execute any bash command. Use for git, system tasks, running scripts, inspecting the environment. No restrictions unless a shell allowlist is configured.
+- `~/.local/bin` is always on PATH. If a CLI tool is missing and you don't have root/sudo, install it there:
+  - Download the binary: `curl -L -o ~/.local/bin/TOOL URL && chmod +x ~/.local/bin/TOOL`
+  - Common tool URLs: `jq` → https://github.com/jqlang/jq/releases/latest/download/jq-linux-amd64
+  - Always try to self-install before asking the user to install something.
 
 ## Web
 - **fetch_url** — Fetch content from a URL (HTML converted to plain text).
