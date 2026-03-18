@@ -181,6 +181,7 @@ export class Agent {
     this.state.chatId = chatId;
 
     let resultText = '';
+    let streamedText = '';
     let newSessionId = sessionId || '';
 
     const externalServers = await this.loadExternalMcpServers();
@@ -238,6 +239,7 @@ export class Agent {
           if (event?.type === 'content_block_delta') {
             const delta = event.delta as Record<string, unknown> | undefined;
             if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+              streamedText += delta.text;
               onStream(delta.text);
             }
           }
@@ -250,11 +252,17 @@ export class Agent {
       throw err;
     }
 
+    if (!resultText && streamedText) {
+      console.log('[agent] No result message — using streamed text as fallback');
+    } else if (!resultText && !streamedText) {
+      console.warn('[agent] No result and no streamed text — response will be empty');
+    }
+
     // Pre-warm next process after query completes
     if (this.lastSpawnOpts) {
       this.pool.schedulePrewarm(this.lastSpawnOpts);
     }
 
-    return { response: resultText, sessionId: newSessionId };
+    return { response: resultText || streamedText, sessionId: newSessionId };
   }
 }
