@@ -137,7 +137,7 @@ export class Agent {
     if (soul) parts.push(soul);
 
     const tools = this.memory.getTools();
-    if (tools) parts.push(`\n${tools}`);
+    if (tools) parts.push(`\n## Tools & Instructions\nIMPORTANT: Follow these instructions carefully — they define your available tools and behavioral rules.\n${tools}`);
 
     const mem = this.memory.getMemory();
     if (mem) parts.push(`\n## Long-term Memory\n${mem}`);
