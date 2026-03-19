@@ -39,7 +39,7 @@ export function loadConfig(): Config {
       .map(s => s.trim())
       .filter(Boolean)
       .map(Number),
-    model: process.env.MODEL || 'claude-sonnet-4-5',
+    model: process.env.MODEL || 'claude-opus-4-6',
     maxTokens: parseInt(process.env.MAX_TOKENS || '8192', 10),
     workspaceDir: process.env.WORKSPACE_DIR || './workspace',
     dataDir: process.env.DATA_DIR || './data',
