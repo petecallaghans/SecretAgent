@@ -38,25 +38,35 @@ export type StreamCallback = (textDelta: string) => void;
  * Spawns a process in advance and hands it to the SDK when query() requests one.
  */
 class ProcessPool {
-  private warm: { process: ReturnType<typeof spawn>; spawnOpts?: SpawnOptions } | null = null;
-  private lastCommand: string | null = null;
-  private lastArgs: string[] | null = null;
+  private warm: { process: ReturnType<typeof spawn>; opts: SpawnOptions } | null = null;
 
-  /**
-   * Pre-spawn a process using the command/args from the last query.
-   * Called after each query completes so the next one is ready immediately.
-   */
+  private optsMatch(a: SpawnOptions, b: SpawnOptions): boolean {
+    if (a.command !== b.command) return false;
+    if (a.cwd !== b.cwd) return false;
+    if (a.args.length !== b.args.length) return false;
+    for (let i = 0; i < a.args.length; i++) {
+      if (a.args[i] !== b.args[i]) return false;
+    }
+    const aEnv = (a.env || {}) as Record<string, string | undefined>;
+    const bEnv = (b.env || {}) as Record<string, string | undefined>;
+    const aKeys = Object.keys(aEnv);
+    const bKeys = Object.keys(bEnv);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const k of aKeys) {
+      if (aEnv[k] !== bEnv[k]) return false;
+    }
+    return true;
+  }
+
   prewarm(opts: SpawnOptions): void {
-    if (this.warm) return; // already warm
-    this.lastCommand = opts.command;
-    this.lastArgs = [...opts.args];
+    if (this.warm) return;
     try {
       const child = spawn(opts.command, opts.args, {
         cwd: opts.cwd,
         env: opts.env as NodeJS.ProcessEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      this.warm = { process: child, spawnOpts: opts };
+      this.warm = { process: child, opts };
       child.on('exit', () => {
         if (this.warm?.process === child) this.warm = null;
       });
@@ -69,22 +79,21 @@ class ProcessPool {
     }
   }
 
-  /**
-   * Called by the SDK via spawnClaudeCodeProcess. Returns a pre-warmed process
-   * if available, otherwise spawns a fresh one and saves opts for next prewarm.
-   */
   acquire(opts: SpawnOptions): SpawnedProcess {
-    this.lastCommand = opts.command;
-    this.lastArgs = [...opts.args];
-
-    if (this.warm) {
+    if (this.warm && this.optsMatch(this.warm.opts, opts)) {
       console.log('[pool] Reusing pre-warmed process');
       const child = this.warm.process;
       this.warm = null;
       return child as unknown as SpawnedProcess;
     }
 
-    console.log('[pool] Cold spawn (no pre-warmed process available)');
+    if (this.warm) {
+      console.log('[pool] Discarding stale pre-warmed process (opts changed)');
+      this.warm.process.kill('SIGTERM');
+      this.warm = null;
+    }
+
+    console.log('[pool] Cold spawn');
     const child = spawn(opts.command, opts.args, {
       cwd: opts.cwd,
       env: opts.env as NodeJS.ProcessEnv,
@@ -93,11 +102,7 @@ class ProcessPool {
     return child as unknown as SpawnedProcess;
   }
 
-  /**
-   * Schedule a prewarm using the last seen spawn options.
-   */
   schedulePrewarm(opts: SpawnOptions): void {
-    // Small delay to let the previous process fully clean up
     setTimeout(() => this.prewarm(opts), 100);
   }
 
@@ -123,6 +128,10 @@ export class Agent {
     private toolServer: unknown,
     private state: { chatId: string },
   ) {}
+
+  dispose(): void {
+    this.pool.dispose();
+  }
 
   private async buildSystemPrompt(): Promise<string> {
     const now = Date.now();

@@ -11,7 +11,8 @@
     "prestart": "npm install --silent && (test -f .env || tsx src/setup.ts)",
     "start": "node dist/index.js",
     "setup": "tsx src/setup.ts",
-    "service": "tsx src/service.ts"
+    "service": "tsx src/service.ts",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.70",
