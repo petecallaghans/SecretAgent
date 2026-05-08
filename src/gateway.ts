@@ -30,6 +30,7 @@ export class Gateway {
     resolve: (s: string) => void;
     reject: (e: Error) => void;
     text: string;
+    onStream?: StreamCallback;
   }>>();
   private cronScheduler?: CronScheduler;
   private webhookServer?: WebhookServer;
@@ -70,7 +71,7 @@ export class Gateway {
           queue = [];
           this.queues.set(chatId, queue);
         }
-        queue.push({ resolve, reject, text });
+        queue.push({ resolve, reject, text, onStream });
       });
     }
 
@@ -84,7 +85,7 @@ export class Gateway {
       if (queue && queue.length > 0) {
         const next = queue.shift()!;
         if (queue.length === 0) this.queues.delete(chatId);
-        this.handleMessage(chatId, next.text).then(next.resolve, next.reject);
+        this.handleMessage(chatId, next.text, next.onStream).then(next.resolve, next.reject);
       }
     }
   }
@@ -165,5 +166,20 @@ export class Gateway {
 
   listWebhooks(): WebhookDef[] {
     return this.webhookServer?.list() || [];
+  }
+
+  /**
+   * Wait for all in-flight and queued messages across all chats to finish.
+   * Times out after `timeoutMs` to avoid hanging shutdown forever.
+   */
+  async drain(timeoutMs = 30_000): Promise<void> {
+    const start = Date.now();
+    while (this.processing.size > 0 || this.queues.size > 0) {
+      if (Date.now() - start > timeoutMs) {
+        console.warn(`[gateway] drain timed out after ${timeoutMs}ms (still processing ${this.processing.size}, queued ${this.queues.size})`);
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
   }
 }

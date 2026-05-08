@@ -86,15 +86,30 @@ async function main() {
   await webhookServer.init();
 
   // Graceful shutdown
-  const shutdown = () => {
-    console.log('\nShutting down...');
-    telegram.stop();
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) {
+      console.log(`\n${signal} again — forcing exit.`);
+      process.exit(1);
+    }
+    shuttingDown = true;
+    console.log(`\nReceived ${signal}, shutting down gracefully...`);
+    // Stop accepting new triggers (cron fires + webhook HTTP)
     cronScheduler.stopAll();
     webhookServer.stop();
+    // Stop bot polling — grammy waits for in-flight handlers to finish
+    telegram.stop();
+    // Drain in-flight + queued agent messages
+    try {
+      await gateway.drain(30_000);
+    } catch (err) {
+      console.error('[shutdown] drain error:', err);
+    }
+    agent.dispose();
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
   // Start bot (blocks until stopped)
   await telegram.start();

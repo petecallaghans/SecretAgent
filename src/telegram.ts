@@ -3,19 +3,11 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { Config, Effort } from './types.js';
 import { MODELS, MODEL_DISPLAY, EFFORT_LEVELS, type Gateway } from './gateway.js';
+import { runUpdate } from './update.js';
 
 const MAX_MESSAGE_LENGTH = 4096;
-
-/** Strip <thinking>...</thinking> blocks from text, including unclosed trailing blocks */
-function stripThinking(text: string): string {
-  let result = text.replace(/<thinking>[\s\S]*?<\/thinking>\s*/g, '');
-  // Hide unclosed thinking block at end (still streaming)
-  const openIdx = result.lastIndexOf('<thinking>');
-  if (openIdx !== -1 && result.indexOf('</thinking>', openIdx) === -1) {
-    result = result.slice(0, openIdx);
-  }
-  return result.trimStart();
-}
+/** Reserve headroom for HTML expansion when chunking raw markdown */
+const SAFE_RAW_LENGTH = MAX_MESSAGE_LENGTH - 256;
 
 interface PendingApproval {
   resolve: (approved: boolean) => void;
@@ -142,21 +134,50 @@ export class TelegramAdapter {
     // /restart - restart the bot process
     this.bot.command('restart', async (ctx) => {
       await ctx.reply('Restarting…');
-      setTimeout(() => {
-        console.log('[telegram] Restart requested via /restart');
-        if (!process.env.INVOCATION_ID) {
-          // Not under systemd — self-restart by spawning a new process
-          const isDev = process.argv[1]?.endsWith('.ts');
-          const cmd = isDev ? 'npm run dev' : 'npm start';
-          spawn('sh', ['-c', `sleep 2 && ${cmd}`], {
-            detached: true,
-            stdio: 'ignore',
-            cwd: process.cwd(),
-          }).unref();
+      setTimeout(() => this.selfRestart('restart'), 500);
+    });
+
+    // /update - pull latest from git, preserve personal files, restart
+    this.bot.command('update', async (ctx) => {
+      const sent = await ctx.reply('Starting update...');
+      const lines: string[] = ['Starting update...'];
+      let lastEdit = 0;
+      const flush = async () => {
+        const now = Date.now();
+        if (now - lastEdit < 1000) return;
+        lastEdit = now;
+        try {
+          await this.bot.api.editMessageText(sent.chat.id, sent.message_id, lines.join('\n'));
+        } catch { /* ignore rate limits / unchanged content */ }
+      };
+      const report = (msg: string) => {
+        lines.push(msg);
+        void flush();
+      };
+
+      try {
+        const result = await runUpdate(report);
+        const finalLines = [...lines];
+        if (result.status === 'up-to-date') {
+          finalLines.push('', result.message);
+          await this.bot.api.editMessageText(sent.chat.id, sent.message_id, finalLines.join('\n'));
+          return;
         }
-        // Under systemd, Restart=always handles it
-        process.exit(0);
-      }, 500);
+        if (result.status === 'failed') {
+          finalLines.push('', `Update failed: ${result.message}`, '', 'Your personal files are unchanged. No restart needed.');
+          await this.bot.api.editMessageText(sent.chat.id, sent.message_id, finalLines.join('\n'));
+          return;
+        }
+        finalLines.push('', result.message, 'Restarting now...');
+        await this.bot.api.editMessageText(sent.chat.id, sent.message_id, finalLines.join('\n'));
+        setTimeout(() => this.selfRestart('update'), 500);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lines.push('', `Update failed: ${msg}`);
+        try {
+          await this.bot.api.editMessageText(sent.chat.id, sent.message_id, lines.join('\n'));
+        } catch { /* ignore */ }
+      }
     });
 
     // /webhook - list webhooks
@@ -219,13 +240,10 @@ export class TelegramAdapter {
         const flushEdit = async () => {
           editTimer = null;
           if (!stream.active) return;
-          const display = stripThinking(streamedText);
+          const display = streamedText;
           if (!display || display === displayedText) return;
-          const truncated = display.length > MAX_MESSAGE_LENGTH
-            ? display.slice(0, MAX_MESSAGE_LENGTH - 3) + '...'
-            : display;
+          const streamHtml = renderForStream(display);
           try {
-            const streamHtml = formatForTelegram(truncated);
             await this.bot.api.editMessageText(
               stream.chatId,
               stream.messageId,
@@ -237,7 +255,7 @@ export class TelegramAdapter {
             // Telegram may reject edits if content unchanged or rate limited
           }
           // If more content arrived during flush, schedule another edit
-          const latest = stripThinking(streamedText);
+          const latest = streamedText;
           if (latest !== displayedText && !editTimer) {
             editTimer = setTimeout(flushEdit, EDIT_INTERVAL_MS);
           }
@@ -261,7 +279,7 @@ export class TelegramAdapter {
           if (!stream.active) {
             if (initSending) return; // already sending placeholder
             // Only send placeholder once we have visible (non-thinking) content
-            const display = stripThinking(streamedText);
+            const display = streamedText;
             if (!display) return;
             initSending = true;
             const sent = await ctx.reply('▍');
@@ -278,27 +296,29 @@ export class TelegramAdapter {
         clearInterval(typingInterval);
         if (editTimer) clearTimeout(editTimer);
 
-        // Strip thinking from final response too
-        const finalText = stripThinking(response || '') || '(no response)';
+        const finalText = (response || '').trim() || '(no response)';
+        const chunks = chunkRaw(finalText);
 
-        // Final update: replace streamed message or send fresh
+        // Final update: replace streamed message with first chunk, send rest fresh
         if (stream.active) {
-          const finalHtml = formatForTelegram(finalText);
-          if (finalHtml.length <= MAX_MESSAGE_LENGTH) {
-            try {
-              await this.bot.api.editMessageText(stream.chatId, stream.messageId, finalHtml, { parse_mode: 'HTML' });
-            } catch {
-              await this.sendLong(ctx, finalText);
-            }
-          } else {
-            // Response too long for single message — delete placeholder and send chunks
-            try {
-              await this.bot.api.deleteMessage(stream.chatId, stream.messageId);
-            } catch { /* ignore */ }
-            await this.sendLong(ctx, finalText);
+          const firstHtml = formatForTelegram(chunks[0]);
+          let edited = false;
+          try {
+            await this.bot.api.editMessageText(stream.chatId, stream.messageId, firstHtml, { parse_mode: 'HTML' });
+            edited = true;
+          } catch {
+            try { await this.bot.api.deleteMessage(stream.chatId, stream.messageId); } catch { /* ignore */ }
+          }
+          if (!edited) {
+            await this.sendLong(ctx, chunks[0]);
+          }
+          for (let i = 1; i < chunks.length; i++) {
+            await this.sendLong(ctx, chunks[i]);
           }
         } else {
-          await this.sendLong(ctx, finalText);
+          for (const chunk of chunks) {
+            await this.sendLong(ctx, chunk);
+          }
         }
       } catch (err: unknown) {
         clearInterval(typingInterval);
@@ -394,15 +414,31 @@ export class TelegramAdapter {
     });
   }
 
+  private selfRestart(reason: string): void {
+    console.log(`[telegram] Self-restart requested via /${reason}`);
+    if (!process.env.INVOCATION_ID) {
+      // Not under systemd — self-restart by spawning a new process
+      const isDev = process.argv[1]?.endsWith('.ts');
+      const cmd = isDev ? 'npm run dev' : 'npm start';
+      spawn('sh', ['-c', `sleep 2 && ${cmd}`], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: process.cwd(),
+      }).unref();
+    }
+    // Under systemd/launchd, Restart=always handles it
+    process.exit(0);
+  }
+
   private async sendLong(ctx: Context, text: string): Promise<void> {
-    const html = formatForTelegram(text);
-    const chunks = splitMessage(html);
+    const chunks = chunkRaw(text);
     for (const chunk of chunks) {
+      const html = formatForTelegram(chunk);
       try {
-        await ctx.reply(chunk, { parse_mode: 'HTML' });
+        await ctx.reply(html, { parse_mode: 'HTML' });
       } catch {
-        // Fallback to plain text if HTML parsing fails
-        await ctx.reply(text.slice(0, MAX_MESSAGE_LENGTH));
+        // Fallback: send raw markdown if HTML parsing fails
+        await ctx.reply(chunk);
       }
     }
   }
@@ -422,13 +458,13 @@ export class TelegramAdapter {
   }
 
   async sendMessage(chatId: number | string, text: string): Promise<void> {
-    const html = formatForTelegram(text);
-    const chunks = splitMessage(html);
+    const chunks = chunkRaw(text);
     for (const chunk of chunks) {
+      const html = formatForTelegram(chunk);
       try {
-        await this.bot.api.sendMessage(Number(chatId), chunk, { parse_mode: 'HTML' });
+        await this.bot.api.sendMessage(Number(chatId), html, { parse_mode: 'HTML' });
       } catch {
-        await this.bot.api.sendMessage(Number(chatId), text.slice(0, MAX_MESSAGE_LENGTH));
+        await this.bot.api.sendMessage(Number(chatId), chunk);
       }
     }
   }
@@ -461,7 +497,7 @@ export class TelegramAdapter {
 }
 
 /** Convert Markdown to Telegram-safe HTML */
-function formatForTelegram(text: string): string {
+export function formatForTelegram(text: string): string {
   // Escape HTML first, then apply markdown conversion
   let html = text;
   // Protect code blocks from escaping
@@ -503,21 +539,51 @@ function formatForTelegram(text: string): string {
   return html;
 }
 
-function splitMessage(text: string): string[] {
-  if (text.length <= MAX_MESSAGE_LENGTH) return [text];
+/**
+ * Split raw markdown so that each chunk's HTML output stays under MAX_MESSAGE_LENGTH.
+ * Prefers \n\n then \n boundaries; falls back to a binary search for hard cuts.
+ */
+export function chunkRaw(text: string): string[] {
+  if (formatForTelegram(text).length <= MAX_MESSAGE_LENGTH) return [text];
 
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > 0) {
-    if (remaining.length <= MAX_MESSAGE_LENGTH) {
+    if (formatForTelegram(remaining).length <= MAX_MESSAGE_LENGTH) {
       chunks.push(remaining);
       break;
     }
-    // Try to split at a newline
-    let splitIdx = remaining.lastIndexOf('\n', MAX_MESSAGE_LENGTH);
-    if (splitIdx <= 0) splitIdx = MAX_MESSAGE_LENGTH;
-    chunks.push(remaining.slice(0, splitIdx));
-    remaining = remaining.slice(splitIdx).replace(/^\n/, '');
+    let cut = Math.min(remaining.length, SAFE_RAW_LENGTH);
+    const para = remaining.lastIndexOf('\n\n', cut);
+    if (para > cut / 2) cut = para;
+    else {
+      const line = remaining.lastIndexOf('\n', cut);
+      if (line > cut / 2) cut = line;
+    }
+    // Shrink until HTML fits (handles dense markdown that expands a lot)
+    while (cut > 1 && formatForTelegram(remaining.slice(0, cut)).length > MAX_MESSAGE_LENGTH) {
+      cut = Math.floor(cut * 0.9);
+    }
+    if (cut < 1) cut = 1;
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut).replace(/^\n+/, '');
   }
   return chunks;
+}
+
+/**
+ * Format text for the streaming preview message: trim raw to a safe length so
+ * the rendered HTML plus the cursor glyph fits in one Telegram message.
+ */
+export function renderForStream(text: string): string {
+  let display = text.length > SAFE_RAW_LENGTH
+    ? text.slice(0, SAFE_RAW_LENGTH - 1) + '…'
+    : text;
+  let html = formatForTelegram(display);
+  // Reserve 4 chars for ' ▍' cursor suffix
+  while (html.length > MAX_MESSAGE_LENGTH - 4 && display.length > 1) {
+    display = display.slice(0, Math.floor(display.length * 0.9));
+    html = formatForTelegram(display);
+  }
+  return html;
 }

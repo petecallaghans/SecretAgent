@@ -52,12 +52,13 @@ src/
   agent.ts        — Agent class wrapping query() async generator
   gateway.ts      — request queue, routes messages/images/voice to agent, per-chat model switching
   sessions.ts     — chatId↔sessionId map (JSON file)
-  telegram.ts     — grammY bot, auth middleware, commands (/start /reset /memory /cron /model /approve /restart /webhook)
+  telegram.ts     — grammY bot, auth middleware, commands (/start /reset /memory /cron /model /approve /restart /update /webhook)
   memory.ts       — soul.md + memory.md + daily logs reader/writer with fs.watch
   cron.ts         — node-cron scheduler with persistence
   webhook.ts      — HTTP server for incoming webhooks
   service.ts      — install/manage as system service (launchd/systemd)
   setup.ts        — interactive first-run setup wizard
+  update.ts       — /update self-update: snapshots workspace personal files, git-resets to upstream, restores files, npm install + build
   tools/
     index.ts      — createToolServer() — MCP server with all tools
     shell.ts      — executeShell() with allowlist
@@ -85,6 +86,8 @@ DATA_DIR=             # default: ./data
 SHELL_ALLOWLIST=      # comma-separated allowed commands (empty = all)
 WEBHOOK_PORT=         # default: 3000
 OPENAI_API_KEY=       # optional, needed for voice transcription
+EFFORT=               # low|medium|high|max (default: low) — caps maxTurns + maxTokens per query
+THINKING=             # adaptive|disabled (default: disabled) — extended thinking mode
 ```
 
 No `ANTHROPIC_API_KEY` — auth is handled by Claude Code's OAuth flow.
