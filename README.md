@@ -1,12 +1,15 @@
 # SecretAgent
 
-Your personal AI assistant on Telegram, powered by Claude. It personalizes itself on first message — choosing a name, personality, and learning about you through conversation.
+Your personal AI assistant on Telegram, powered by Claude (with OpenAI as a cheap helper). It personalizes itself on first message — choosing a name, personality, and learning about you through conversation.
+
+Claude Opus drives the conversation. For routine subtasks (parsing, summarizing, extracting, formatting, transcribing voice) the agent hands off to OpenAI models via a built-in `delegate` tool and Whisper. This keeps Claude Max plan token usage to a minimum without sacrificing the quality of the main agent.
 
 ## Prerequisites
 
 - **Node.js 22+**
-- **Claude Code** with a Max or Team subscription
+- **Claude Code** with a Max or Team subscription (main agent — no Anthropic API key needed)
 - **Telegram** account
+- **OpenAI API key** *(optional but recommended)* — unlocks voice transcription via Whisper and the `delegate` tool that offloads cheap work off the Max plan
 
 ## Quick Start
 
