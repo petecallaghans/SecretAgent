@@ -15,7 +15,7 @@ import { createToolServer } from './tools/index.js';
 async function main() {
   const config = loadConfig();
   console.log('Starting SecretAgent...');
-  console.log(`  Model: ${config.model}`);
+  console.log(`  Models: light=${config.modelLight} default=${config.modelDefault} deep=${config.modelDeep}`);
   console.log(`  Allowed users: ${config.allowedUsers.length > 0 ? config.allowedUsers.join(', ') : '(all)'}`);
   console.log(`  Workspace: ${config.workspaceDir}`);
 
@@ -65,7 +65,7 @@ async function main() {
   cronScheduler.setFireHandler(async (job) => {
     console.log(`Cron fired: ${job.id} - "${job.prompt}"`);
     try {
-      const response = await gateway.handleMessage(job.chatId.toString(), job.prompt);
+      const response = await gateway.handleMessage(job.chatId.toString(), job.prompt, undefined, 'cron');
       await telegram.sendMessage(job.chatId, response);
     } catch (err) {
       console.error(`Cron ${job.id} failed:`, err);
@@ -75,7 +75,7 @@ async function main() {
   // Wire webhooks to send results via Telegram
   webhookServer.setFireHandler(async (webhook, prompt) => {
     try {
-      const response = await gateway.handleMessage(webhook.chatId.toString(), prompt);
+      const response = await gateway.handleMessage(webhook.chatId.toString(), prompt, undefined, 'webhook');
       await telegram.sendMessage(webhook.chatId, response);
     } catch (err) {
       console.error(`Webhook ${webhook.id} failed:`, err);

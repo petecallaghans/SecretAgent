@@ -216,7 +216,7 @@ export class Agent {
 
     const options: Record<string, unknown> = {
       systemPrompt: await this.buildSystemPrompt(),
-      model: model || this.config.model,
+      model: model || this.config.modelDefault,
       maxTurns,
       maxTokens,
       allowedTools,

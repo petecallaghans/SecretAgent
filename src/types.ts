@@ -4,13 +4,18 @@ export type ThinkingMode = 'adaptive' | 'disabled';
 export interface Config {
   telegramBotToken: string;
   allowedUsers: number[];
-  model: string;
+  modelDefault: string;
+  modelLight: string;
+  modelDeep: string;
   maxTokens: number;
   workspaceDir: string;
   dataDir: string;
   shellAllowlist: string[];
   webhookPort: number;
   openaiApiKey: string;
+  openaiDelegateNano: string;
+  openaiDelegateMini: string;
+  openaiDelegateSmart: string;
   effort: Effort;
   thinking: ThinkingMode;
 }
@@ -39,7 +44,9 @@ export function loadConfig(): Config {
       .map(s => s.trim())
       .filter(Boolean)
       .map(Number),
-    model: process.env.MODEL || 'claude-opus-4-6',
+    modelDefault: process.env.MODEL_DEFAULT || process.env.MODEL || 'claude-opus-4-6',
+    modelLight: process.env.MODEL_LIGHT || 'claude-haiku-4-5',
+    modelDeep: process.env.MODEL_DEEP || 'claude-opus-4-6',
     maxTokens: parseInt(process.env.MAX_TOKENS || '8192', 10),
     workspaceDir: process.env.WORKSPACE_DIR || './workspace',
     dataDir: process.env.DATA_DIR || './data',
@@ -49,6 +56,9 @@ export function loadConfig(): Config {
       .filter(Boolean),
     webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
     openaiApiKey: process.env.OPENAI_API_KEY || '',
+    openaiDelegateNano: process.env.OPENAI_DELEGATE_NANO || 'gpt-5.4-nano',
+    openaiDelegateMini: process.env.OPENAI_DELEGATE_MINI || 'gpt-5-mini',
+    openaiDelegateSmart: process.env.OPENAI_DELEGATE_SMART || 'gpt-5.4-mini',
     effort: (process.env.EFFORT as Effort) || 'low',
     thinking: (process.env.THINKING as ThinkingMode) || 'disabled',
   };
