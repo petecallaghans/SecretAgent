@@ -10,19 +10,28 @@ import type { WebhookServer } from './webhook.js';
 
 import type { Effort, ThinkingMode } from './types.js';
 
+export type MessageSource = 'user' | 'cron' | 'webhook' | 'voice';
+
 export const MODELS: Record<string, string> = {
+  'haiku-4-5': 'claude-haiku-4-5',
   'sonnet-4-5': 'claude-sonnet-4-5',
   'sonnet-4-6': 'claude-sonnet-4-6',
   'opus-4-6': 'claude-opus-4-6',
 };
 
 export const MODEL_DISPLAY: Record<string, string> = {
+  'claude-haiku-4-5': 'Haiku 4.5',
   'claude-sonnet-4-5': 'Sonnet 4.5',
   'claude-sonnet-4-6': 'Sonnet 4.6',
   'claude-opus-4-6': 'Opus 4.6',
 };
 
 export const EFFORT_LEVELS: Effort[] = ['low', 'medium', 'high', 'max'];
+
+/** Strip leading /deep or /light prefix from user text. */
+export function stripPrefix(message: string): string {
+  return message.replace(/^\/(deep|light)(\s+|$)/, '');
+}
 
 export class Gateway {
   private processing = new Set<string>();
@@ -31,6 +40,7 @@ export class Gateway {
     reject: (e: Error) => void;
     text: string;
     onStream?: StreamCallback;
+    source: MessageSource;
   }>>();
   private cronScheduler?: CronScheduler;
   private webhookServer?: WebhookServer;
@@ -62,8 +72,12 @@ export class Gateway {
     return this.approvalEnabled.get(chatId) ?? false;
   }
 
-  async handleMessage(chatId: string, text: string, onStream?: StreamCallback): Promise<string> {
-    // Queue if already processing for this session
+  async handleMessage(
+    chatId: string,
+    text: string,
+    onStream?: StreamCallback,
+    source: MessageSource = 'user',
+  ): Promise<string> {
     if (this.processing.has(chatId)) {
       return new Promise((resolve, reject) => {
         let queue = this.queues.get(chatId);
@@ -71,33 +85,56 @@ export class Gateway {
           queue = [];
           this.queues.set(chatId, queue);
         }
-        queue.push({ resolve, reject, text, onStream });
+        queue.push({ resolve, reject, text, onStream, source });
       });
     }
 
     this.processing.add(chatId);
     try {
-      return await this.processMessage(chatId, text, onStream);
+      return await this.processMessage(chatId, text, source, onStream);
     } finally {
       this.processing.delete(chatId);
-      // Process next queued message
       const queue = this.queues.get(chatId);
       if (queue && queue.length > 0) {
         const next = queue.shift()!;
         if (queue.length === 0) this.queues.delete(chatId);
-        this.handleMessage(chatId, next.text, next.onStream).then(next.resolve, next.reject);
+        this.handleMessage(chatId, next.text, next.onStream, next.source).then(next.resolve, next.reject);
       }
     }
   }
 
-  private async processMessage(chatId: string, text: string, onStream?: StreamCallback): Promise<string> {
+  private async processMessage(
+    chatId: string,
+    text: string,
+    source: MessageSource,
+    onStream?: StreamCallback,
+  ): Promise<string> {
     const sessionId = this.sessions.getSessionId(chatId);
-    const model = this.chatModels.get(chatId);
-    const { response, sessionId: newSessionId } = await this.agent.run(text, sessionId, chatId, model, onStream);
+    const model = this.selectModel(chatId, text, source);
+    const cleanText = source === 'user' ? stripPrefix(text) : text;
+    const { response, sessionId: newSessionId } = await this.agent.run(cleanText, sessionId, chatId, model, onStream);
     if (newSessionId) {
       await this.sessions.setSessionId(chatId, newSessionId);
     }
     return response;
+  }
+
+  /**
+   * Route a message to the appropriate model tier.
+   *   1. User /deep or /light prefix → deep/light override (single message).
+   *   2. cron/webhook/voice → light (formatting / transcription relay).
+   *   3. Per-chat session default set via /model.
+   *   4. config.modelDefault.
+   */
+  selectModel(chatId: string, message: string, source: MessageSource): string {
+    if (source === 'user') {
+      if (/^\/deep(\s|$)/.test(message)) return this.config.modelDeep;
+      if (/^\/light(\s|$)/.test(message)) return this.config.modelLight;
+    }
+    if (source === 'cron' || source === 'webhook' || source === 'voice') {
+      return this.config.modelLight;
+    }
+    return this.chatModels.get(chatId) || this.config.modelDefault;
   }
 
   setModel(chatId: string, model: string): void {
@@ -105,7 +142,7 @@ export class Gateway {
   }
 
   getModel(chatId: string): string {
-    return this.chatModels.get(chatId) || this.config.model;
+    return this.chatModels.get(chatId) || this.config.modelDefault;
   }
 
   setEffort(effort: Effort): void {
@@ -137,7 +174,7 @@ export class Gateway {
     const prompt = caption
       ? `[Voice transcript] ${transcript}\n\n${caption}`
       : `[Voice transcript] ${transcript}`;
-    return this.handleMessage(chatId, prompt);
+    return this.handleMessage(chatId, prompt, undefined, 'voice');
   }
 
   async handleImage(chatId: string, base64: string, caption: string): Promise<string> {

@@ -79,7 +79,12 @@ data/
 ```
 TELEGRAM_BOT_TOKEN=   # required
 ALLOWED_USERS=        # comma-separated Telegram user IDs (empty = all)
-MODEL=                # default: claude-sonnet-4-5
+MODEL_LIGHT=          # default: claude-haiku-4-5 — cron, webhooks, voice (cheap relay)
+MODEL_DEFAULT=        # default: claude-opus-4-6 — main user-facing agent (fallback: MODEL)
+MODEL_DEEP=           # default: claude-opus-4-6 — /deep prefix override
+OPENAI_DELEGATE_NANO= # default: gpt-5.4-nano — `delegate` tool trivial tier
+OPENAI_DELEGATE_MINI= # default: gpt-5-mini — `delegate` tool workhorse
+OPENAI_DELEGATE_SMART=# default: gpt-5.4-mini — `delegate` tool harder subtasks
 MAX_TOKENS=           # default: 8192
 WORKSPACE_DIR=        # default: ./workspace
 DATA_DIR=             # default: ./data

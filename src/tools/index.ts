@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { executeShell } from './shell.js';
 import { fetchUrl, webSearch } from './web.js';
 import { readFileContent, writeFileContent, listFiles, resolveSafe } from './files.js';
+import { runDelegate } from './delegate.js';
 import type { Config } from '../types.js';
 import type { Memory } from '../memory.js';
 
@@ -178,6 +179,35 @@ export function createToolServer(
           chatId: Number(callbacks.getChatId()) || 0,
         });
         return { content: [{ type: 'text' as const, text: result }] };
+      },
+    ),
+    tool(
+      'delegate',
+      [
+        'Hand off a subtask to a cheap helper model (OpenAI) to minimize Claude Max plan usage.',
+        'USE THIS for any work that does not require top-tier reasoning: lookups, parsing, summarizing,',
+        'reformatting, classifying, extracting fields, drafting boilerplate, translating, generating regex,',
+        'parsing JSON, writing simple code snippets, web-content distillation, calendar/email parsing.',
+        'You synthesize the final user-facing answer; the helper only produces raw intermediate output.',
+        'The helper has NO conversation history — include all needed context in the task.',
+        'Tiers: nano = trivial (one-word classify, tiny extracts), mini = default workhorse,',
+        'smart = harder reasoning (multi-step summary, longer rewrites). Prefer mini unless reason to differ.',
+        'Set json=true when you need a parseable JSON object back.',
+      ].join(' '),
+      {
+        task: z.string().describe('Self-contained instruction. Include all context the helper needs.'),
+        tier: z.enum(['nano', 'mini', 'smart']).optional().describe('Helper size. Default mini.'),
+        json: z.boolean().optional().describe('Force JSON object response.'),
+        system: z.string().optional().describe('Optional system instruction for the helper. Default is generic.'),
+      },
+      async ({ task, tier, json, system }) => {
+        try {
+          const result = await runDelegate(config, { task, tier, json, system });
+          return { content: [{ type: 'text' as const, text: result }] };
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: [{ type: 'text' as const, text: `Delegate error: ${msg}` }] };
+        }
       },
     ),
     tool(

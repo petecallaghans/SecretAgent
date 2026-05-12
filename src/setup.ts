@@ -131,7 +131,12 @@ async function main(): Promise<void> {
   const envContent = [
     `TELEGRAM_BOT_TOKEN=${token}`,
     `ALLOWED_USERS=${allowedUsers.join(',')}`,
-    `MODEL=claude-sonnet-4-5`,
+    `MODEL_LIGHT=claude-haiku-4-5`,
+    `MODEL_DEFAULT=claude-opus-4-6`,
+    `MODEL_DEEP=claude-opus-4-6`,
+    `OPENAI_DELEGATE_NANO=gpt-5.4-nano`,
+    `OPENAI_DELEGATE_MINI=gpt-5-mini`,
+    `OPENAI_DELEGATE_SMART=gpt-5.4-mini`,
     `MAX_TOKENS=8192`,
     `WORKSPACE_DIR=./workspace`,
     `DATA_DIR=./data`,
