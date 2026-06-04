@@ -72,6 +72,9 @@ All config lives in `.env` (created by setup):
 | `DATA_DIR`              | `./data`             | Session, cron, and webhook data                                   |
 | `SHELL_ALLOWLIST`       | *(empty = all)*      | Comma-separated allowed shell commands                            |
 | `WEBHOOK_PORT`          | `3000`               | Port for incoming webhooks                                        |
+| `PEER_SECRET`           | *(optional)*         | Shared bearer secret for the peer channel (multi-agent teams)     |
+| `MAX_HOPS`              | `8`                  | Max agent↔agent hops before a chain halts for a human            |
+| `PEER_ROSTER`           | *(optional)*         | Inline roster JSON; overrides `workspace/roster.json`             |
 
 ## Scripts
 
@@ -112,6 +115,56 @@ To keep Claude Max plan usage low, messages are routed across three Claude tiers
 | `/model <name>` (session)       | Whatever the user set                   |
 
 The main agent also has a **`delegate` tool** that calls OpenAI (gpt-5-mini default) for cheap subtasks — parsing tool output, summarizing fetched pages, extracting fields, classifying intent, formatting. Opus synthesizes the final answer; the helper produces raw intermediate output. This keeps large raw outputs out of the conversation history that re-enters input on every following turn, cutting Max-plan token usage significantly on tool-heavy workloads.
+
+## Running a Team (multi-agent collaboration)
+
+Run several SecretAgent instances that know each other and collaborate. Each keeps its own
+`soul.md` (identity, role). You invite all their bots into one Telegram group, where you watch
+and steer; the agents talk to each other over a private peer channel.
+
+**Why a peer channel?** Telegram bots cannot see each other's messages (platform rule). So
+agent↔agent comms travel over HTTP (`POST /peer`, reusing the webhook server), while the
+Telegram group is for human visibility and steering. Handoffs are mirrored into the group so
+you can follow along.
+
+### Setup
+
+1. **Per instance:** its own bot token, `WEBHOOK_PORT`, `DATA_DIR`, and `WORKSPACE_DIR`.
+2. **Shared:** the same `PEER_SECRET` on every instance, the same Telegram `groupChatId`, and a
+   roster. Copy `workspace/roster.example.json` to `workspace/roster.json` and set `self` to
+   this instance's id (everything else can be identical across instances).
+3. **Invite** every bot to the group and grant it message access.
+
+```jsonc
+// workspace/roster.json — plain JSON only (no comments); peerUrls contain "//"
+{
+  "self": "alice",                          // differs per instance
+  "groupChatId": "-1001234567890",          // shared Telegram group
+  "sharedSecret": "env:PEER_SECRET",         // bearer for /peer; read from env
+  "peers": [
+    { "id": "alice", "name": "Alice", "role": "researcher", "peerUrl": "http://host-a:3000/peer" },
+    { "id": "bob",   "name": "Bob",   "role": "writer",     "peerUrl": "http://host-b:3001/peer" }
+  ]
+}
+```
+
+### How it behaves
+
+- **Opt-in.** No roster (or no peers) → classic single-agent behavior, unchanged.
+- **Mention-gating.** In a group, an agent acts only when addressed — its @username, its
+  name, or its id, or a reply to one of its own messages. (Private chats: unchanged.) Use
+  `/command@BotName` to scope slash commands to one bot in a group.
+- **`message_peer` tool.** Agents hand off with `message_peer({ to, message, payload? })`.
+  Replies arrive later as a new inbound message — agents don't block waiting.
+- **Loop safety.** A `hops` counter caps runaway chains at `MAX_HOPS` (default 8); on the cap,
+  the chain halts and asks for a human.
+
+### Security
+
+The peer channel is bearer-authenticated with `PEER_SECRET`. Keep `peerUrl`s on a private
+network (LAN/VPN/localhost) — don't expose `/peer` to the open internet. Content that an agent
+fetched from the outside (emails, web pages) and forwards in a peer message is still untrusted
+data; write your souls to treat it as such.
 
 ## Running 24/7
 

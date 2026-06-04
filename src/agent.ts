@@ -3,8 +3,9 @@ import { spawn } from 'child_process';
 import { readFile } from 'fs/promises';
 import { existsSync, statSync } from 'fs';
 import path from 'path';
-import type { Config } from './types.js';
+import type { Config, AgentState, PeerContext } from './types.js';
 import type { Memory } from './memory.js';
+import type { Roster } from './roster.js';
 
 const SERVER_NAME = 'secret-agent-tools';
 
@@ -126,7 +127,8 @@ export class Agent {
     private config: Config,
     private memory: Memory,
     private toolServer: unknown,
-    private state: { chatId: string },
+    private state: AgentState,
+    private roster: Roster | null = null,
   ) {}
 
   dispose(): void {
@@ -144,6 +146,8 @@ export class Agent {
 
     const soul = this.memory.getSoul();
     if (soul) parts.push(soul);
+
+    if (this.roster) parts.push(`\n${this.roster.describe()}`);
 
     const tools = this.memory.getTools();
     if (tools) parts.push(`\n## Tools & Instructions\nIMPORTANT: Follow these instructions carefully — they define your available tools and behavioral rules.\n${tools}`);
@@ -186,8 +190,11 @@ export class Agent {
     chatId: string,
     model?: string,
     onStream?: StreamCallback,
+    peerCtx?: PeerContext,
   ): Promise<{ response: string; sessionId: string }> {
+    // Set chatId and peer context together so tools see a consistent view for this run.
     this.state.chatId = chatId;
+    this.state.peer = peerCtx;
 
     let resultText = '';
     let streamedText = '';
