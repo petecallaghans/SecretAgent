@@ -127,44 +127,153 @@ agent↔agent comms travel over HTTP (`POST /peer`, reusing the webhook server),
 Telegram group is for human visibility and steering. Handoffs are mirrored into the group so
 you can follow along.
 
-### Setup
+```
+        ┌──────── Telegram group (you watch + steer) ────────┐
+        │   Alice posts ▲    Bob posts ▲    You ▲             │
+        └───────▲─────────────────▲──────────────▲───────────┘
+                │                  │              │
+        ┌───────┴──────┐  /peer ┌──┴───────────┐ │ @mentions
+        │  Instance A  │ (HTTP) │  Instance B   │◀┘ (group-gated)
+        │  self: alice │◀──────▶│  self: bob    │
+        └──────────────┘        └───────────────┘
+```
 
-1. **Per instance:** its own bot token, `WEBHOOK_PORT`, `DATA_DIR`, and `WORKSPACE_DIR`.
-2. **Shared:** the same `PEER_SECRET` on every instance, the same Telegram `groupChatId`, and a
-   roster. Copy `workspace/roster.example.json` to `workspace/roster.json` and set `self` to
-   this instance's id (everything else can be identical across instances).
-3. **Invite** every bot to the group and grant it message access.
+### Step 1 — Create the bots
 
-```jsonc
-// workspace/roster.json — plain JSON only (no comments); peerUrls contain "//"
+In Telegram, talk to [@BotFather](https://t.me/BotFather) and run `/newbot` once per agent
+(e.g. `Alice`, `Bob`). Save each bot token. Then, so bots can read normal group messages,
+send BotFather `/setprivacy` → pick each bot → **Disable**. (With privacy enabled a bot only
+sees messages that @mention it or reply to it — mention-gating still works, but plain-name
+addressing like "Alice, do X" won't reach the bot.)
+
+### Step 2 — Create the group and get its ID
+
+1. Create a Telegram group and add **all** the agent bots plus yourself.
+2. Get the group's chat id: add [@RawDataBot](https://t.me/RawDataBot) to the group briefly
+   and read `message.chat.id` (a negative number like `-1001234567890`), then remove it.
+   Alternatively, message the group and open
+   `https://api.telegram.org/bot<ANY_BOT_TOKEN>/getUpdates` and read `chat.id`.
+
+### Step 3 — Lay out one instance per agent
+
+Each agent is a separate process with its own token, port, data dir, and workspace. Two ways:
+
+**Same machine (simplest for testing):** one clone, different env vars per process.
+
+```bash
+# Alice — terminal 1
+TELEGRAM_BOT_TOKEN=<alice-token> PEER_SECRET=shared-secret \
+WEBHOOK_PORT=3000 DATA_DIR=./dataA WORKSPACE_DIR=./wsA npm run dev
+
+# Bob — terminal 2
+TELEGRAM_BOT_TOKEN=<bob-token> PEER_SECRET=shared-secret \
+WEBHOOK_PORT=3001 DATA_DIR=./dataB WORKSPACE_DIR=./wsB npm run dev
+```
+
+**Separate machines/VMs:** one deploy each, normal `.env` per host. Set each `peerUrl` to the
+reachable address of that host (LAN/VPN/localhost — see Security).
+
+### Step 4 — Write the shared roster
+
+Copy `workspace/roster.example.json` to each instance's `WORKSPACE_DIR/roster.json`. The file
+is **identical across instances except `self`**, which is that instance's own id.
+
+```json
 {
-  "self": "alice",                          // differs per instance
-  "groupChatId": "-1001234567890",          // shared Telegram group
-  "sharedSecret": "env:PEER_SECRET",         // bearer for /peer; read from env
+  "self": "alice",
+  "groupChatId": "-1001234567890",
+  "sharedSecret": "env:PEER_SECRET",
   "peers": [
-    { "id": "alice", "name": "Alice", "role": "researcher", "peerUrl": "http://host-a:3000/peer" },
-    { "id": "bob",   "name": "Bob",   "role": "writer",     "peerUrl": "http://host-b:3001/peer" }
+    { "id": "alice", "name": "Alice", "role": "researcher", "peerUrl": "http://127.0.0.1:3000/peer" },
+    { "id": "bob",   "name": "Bob",   "role": "writer",     "peerUrl": "http://127.0.0.1:3001/peer" }
   ]
 }
 ```
 
+- Plain JSON only — **no comments**; `peerUrl`s contain `//` and a comment-stripper would corrupt them.
+- `sharedSecret: "env:PEER_SECRET"` reads the secret from the env var (keeps it out of the file).
+- `peerUrl` is `http://<host>:<that instance's WEBHOOK_PORT>/peer`.
+- Bob's copy is the same file with `"self": "bob"`.
+
+### Step 5 — Give each agent a role in its soul
+
+`soul.md` holds personality and behavior; the framework only supplies the *mechanism* to message
+peers. Tell each agent how to collaborate. Example snippets:
+
+```markdown
+<!-- wsA/soul.md (Alice, the researcher) -->
+You are Alice, the team's researcher. When asked to investigate something, gather the facts
+with your tools, then hand the findings to Bob with `message_peer({ to: "bob", message, payload })`.
+Don't write the final copy yourself — that's Bob's job.
+```
+
+```markdown
+<!-- wsB/soul.md (Bob, the writer) -->
+You are Bob, the team's writer. When Alice sends you research, draft the piece, post it to the
+group, and message Alice back if you need anything. Replies from teammates arrive as new
+messages — don't wait around for them.
+```
+
+### Step 6 — Run and try it
+
+Start all instances. In the group, address an agent by @username, name, or id:
+
+```
+@AliceBot research the top 3 LLM eval frameworks and have Bob write a short summary.
+```
+
+You should see: Alice works, a mirrored `→ Bob: …` handoff line, Bob's draft posted to the
+group, and any reply back to Alice — all visible to you, who can interrupt at any point.
+
 ### How it behaves
 
 - **Opt-in.** No roster (or no peers) → classic single-agent behavior, unchanged.
-- **Mention-gating.** In a group, an agent acts only when addressed — its @username, its
-  name, or its id, or a reply to one of its own messages. (Private chats: unchanged.) Use
+- **Mention-gating.** In a group, an agent acts only when addressed — its @username, its name,
+  or its id, or a reply to one of its own messages. (Private chats: unchanged.) Use
   `/command@BotName` to scope slash commands to one bot in a group.
 - **`message_peer` tool.** Agents hand off with `message_peer({ to, message, payload? })`.
   Replies arrive later as a new inbound message — agents don't block waiting.
+- **Sessions.** Each peer conversation runs in its own chain-scoped session, so unrelated
+  hand-offs don't bleed into one another.
 - **Loop safety.** A `hops` counter caps runaway chains at `MAX_HOPS` (default 8); on the cap,
   the chain halts and asks for a human.
 
+### Verify the peer channel (without a group)
+
+Confirm the wire works against a single running instance:
+
+```bash
+# Pretend Bob messaged Alice (Alice running on :3000 with PEER_SECRET=shared-secret)
+curl -i -XPOST http://127.0.0.1:3000/peer \
+  -H 'Authorization: Bearer shared-secret' -H 'Content-Type: application/json' \
+  -d '{"from":"bob","to":"alice","message":"can you research X and send notes?"}'
+# → HTTP 202 {"accepted":true,"msgId":"..."}; wrong/absent token → 401
+```
+
 ### Security
 
-The peer channel is bearer-authenticated with `PEER_SECRET`. Keep `peerUrl`s on a private
-network (LAN/VPN/localhost) — don't expose `/peer` to the open internet. Content that an agent
-fetched from the outside (emails, web pages) and forwards in a peer message is still untrusted
-data; write your souls to treat it as such.
+- The peer channel is bearer-authenticated with `PEER_SECRET` (constant-time compared). Use a
+  long random value and the **same** one on every instance.
+- Keep `peerUrl`s on a private network (LAN/VPN/localhost). **Don't expose `/peer` to the open
+  internet.**
+- Content an agent fetched from outside (emails, web pages) and forwards in a peer message is
+  still untrusted data. The framework never auto-executes payloads — agents decide — so write
+  your souls to treat forwarded content with suspicion.
+
+### Troubleshooting
+
+- **Both bots reply to everything** → roster not loaded (mention-gating only activates with a
+  roster). Check the startup log for `Team: I am …`; confirm `roster.json` is in the right
+  `WORKSPACE_DIR` and is valid JSON.
+- **Agent ignores "Alice, do X" but answers "@AliceBot do X"** → bot privacy mode is on; disable
+  it via BotFather `/setprivacy` (Step 1).
+- **`message_peer` says "unknown teammate"** → the `to` value must match a peer `id` or `name`
+  in the roster.
+- **Peer delivery fails / 401** → `PEER_SECRET` differs between instances, or `peerUrl`/port is
+  wrong or unreachable. The sender mirrors the failure to the group.
+- **"Hop limit reached"** → a chain hit `MAX_HOPS`; reply in the group to continue, or raise
+  `MAX_HOPS`.
+- **Startup error `Roster 'self' id "x" not found`** → `self` doesn't match any peer `id`.
 
 ## Running 24/7
 
