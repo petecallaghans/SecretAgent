@@ -1,16 +1,17 @@
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import OpenAI from 'openai';
-import type { Config, CronJobDef, WebhookDef } from './types.js';
+import type { Config, CronJobDef, WebhookDef, PeerContext, PeerMessage } from './types.js';
 import type { SessionManager } from './sessions.js';
 import type { Agent, StreamCallback } from './agent.js';
 import type { Memory } from './memory.js';
 import type { CronScheduler } from './cron.js';
 import type { WebhookServer } from './webhook.js';
+import type { Roster } from './roster.js';
 
 import type { Effort, ThinkingMode } from './types.js';
 
-export type MessageSource = 'user' | 'cron' | 'webhook' | 'voice';
+export type MessageSource = 'user' | 'cron' | 'webhook' | 'voice' | 'peer';
 
 export const MODELS: Record<string, string> = {
   'haiku-4-5': 'claude-haiku-4-5',
@@ -41,6 +42,8 @@ export class Gateway {
     text: string;
     onStream?: StreamCallback;
     source: MessageSource;
+    sessionKey?: string;
+    peerCtx?: PeerContext;
   }>>();
   private cronScheduler?: CronScheduler;
   private webhookServer?: WebhookServer;
@@ -52,6 +55,7 @@ export class Gateway {
     private sessions: SessionManager,
     private agent: Agent,
     private memory: Memory,
+    private roster: Roster | null = null,
   ) {}
 
   setCronScheduler(scheduler: CronScheduler): void {
@@ -77,6 +81,8 @@ export class Gateway {
     text: string,
     onStream?: StreamCallback,
     source: MessageSource = 'user',
+    sessionKey?: string,
+    peerCtx?: PeerContext,
   ): Promise<string> {
     if (this.processing.has(chatId)) {
       return new Promise((resolve, reject) => {
@@ -85,20 +91,21 @@ export class Gateway {
           queue = [];
           this.queues.set(chatId, queue);
         }
-        queue.push({ resolve, reject, text, onStream, source });
+        queue.push({ resolve, reject, text, onStream, source, sessionKey, peerCtx });
       });
     }
 
     this.processing.add(chatId);
     try {
-      return await this.processMessage(chatId, text, source, onStream);
+      return await this.processMessage(chatId, text, source, onStream, sessionKey, peerCtx);
     } finally {
       this.processing.delete(chatId);
       const queue = this.queues.get(chatId);
       if (queue && queue.length > 0) {
         const next = queue.shift()!;
         if (queue.length === 0) this.queues.delete(chatId);
-        this.handleMessage(chatId, next.text, next.onStream, next.source).then(next.resolve, next.reject);
+        this.handleMessage(chatId, next.text, next.onStream, next.source, next.sessionKey, next.peerCtx)
+          .then(next.resolve, next.reject);
       }
     }
   }
@@ -108,15 +115,42 @@ export class Gateway {
     text: string,
     source: MessageSource,
     onStream?: StreamCallback,
+    sessionKey?: string,
+    peerCtx?: PeerContext,
   ): Promise<string> {
-    const sessionId = this.sessions.getSessionId(chatId);
+    // Peer-triggered runs are scoped to a per-conversation session key so unrelated
+    // chains don't bleed into one another; everything else keys on chatId.
+    const key = sessionKey ?? chatId;
+    const sessionId = this.sessions.getSessionId(key);
     const model = this.selectModel(chatId, text, source);
     const cleanText = source === 'user' ? stripPrefix(text) : text;
-    const { response, sessionId: newSessionId } = await this.agent.run(cleanText, sessionId, chatId, model, onStream);
+    const { response, sessionId: newSessionId } = await this.agent.run(
+      cleanText, sessionId, chatId, model, onStream, peerCtx,
+    );
     if (newSessionId) {
-      await this.sessions.setSessionId(chatId, newSessionId);
+      await this.sessions.setSessionId(key, newSessionId);
     }
     return response;
+  }
+
+  /**
+   * Handle an inbound peer message: frame it with the sender's identity, route it
+   * through the queue under a chain-scoped session, and return the agent's reply.
+   * The reply is posted to the group by the caller (humans watch there).
+   */
+  async handlePeerMessage(env: PeerMessage): Promise<string> {
+    if (!this.roster) throw new Error('Received a peer message but no roster is configured.');
+    const sender = this.roster.resolvePeer(env.from);
+    const senderLabel = sender ? `${sender.name} (${sender.role})` : env.from;
+
+    let framed = `Message from teammate ${senderLabel} [peer]:\n${env.message}`;
+    if (env.payload !== undefined) {
+      framed += `\n\nStructured payload:\n${JSON.stringify(env.payload, null, 2)}`;
+    }
+
+    const peerCtx: PeerContext = { chainId: env.chainId, hops: env.hops, replyTo: env.msgId };
+    const groupChatId = this.roster.groupChatId;
+    return this.handleMessage(groupChatId, framed, undefined, 'peer', `peer:${env.chainId}`, peerCtx);
   }
 
   /**

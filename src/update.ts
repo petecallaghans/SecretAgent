@@ -12,6 +12,7 @@ const PRESERVED_FILES = [
   'workspace/memory.md',
   'workspace/tools.md',
   'workspace/mcp.json',
+  'workspace/roster.json',
 ];
 
 export interface UpdateResult {

@@ -1,0 +1,10 @@
+{
+  "self": "alice",
+  "groupChatId": "-1001234567890",
+  "sharedSecret": "env:PEER_SECRET",
+  "peers": [
+    { "id": "alice", "name": "Alice", "role": "researcher", "peerUrl": "http://127.0.0.1:3000/peer" },
+    { "id": "bob",   "name": "Bob",   "role": "writer",     "peerUrl": "http://127.0.0.1:3001/peer" },
+    { "id": "carol", "name": "Carol", "role": "reviewer",   "peerUrl": "http://127.0.0.1:3002/peer" }
+  ]
+}

@@ -36,6 +36,31 @@ export interface WebhookDef {
   secret?: string;
 }
 
+/** Agent↔agent message envelope, carried over the private /peer HTTP channel. */
+export interface PeerMessage {
+  msgId: string;
+  from: string; // sender agent id
+  to: string; // recipient agent id
+  message: string; // natural-language content
+  payload?: unknown; // optional structured data (user-defined; framework-agnostic)
+  replyTo?: string; // msgId this responds to (threads a conversation)
+  chainId: string; // root of the conversation; scopes the receiver's session
+  hops: number; // incremented each relay; used for loop control
+}
+
+/** Per-run peer context, set on shared state so message_peer can thread replies. */
+export interface PeerContext {
+  chainId: string;
+  hops: number; // hops of the inbound message that triggered this run
+  replyTo?: string; // msgId of the inbound message (so replies thread)
+}
+
+/** Mutable state shared between Agent and the tool server for the active run. */
+export interface AgentState {
+  chatId: string;
+  peer?: PeerContext;
+}
+
 export function loadConfig(): Config {
   return {
     telegramBotToken: requireEnv('TELEGRAM_BOT_TOKEN'),

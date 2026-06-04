@@ -11,6 +11,8 @@ import { WebhookServer } from './webhook.js';
 import { Gateway } from './gateway.js';
 import { TelegramAdapter } from './telegram.js';
 import { createToolServer } from './tools/index.js';
+import { Roster } from './roster.js';
+import type { AgentState } from './types.js';
 
 async function main() {
   const config = loadConfig();
@@ -26,11 +28,18 @@ async function main() {
   const memory = new Memory(config);
   await memory.init();
 
-  const cronScheduler = new CronScheduler(config);
-  const webhookServer = new WebhookServer(config);
+  // Optional team roster — null means single-agent (classic) behavior.
+  const roster = await Roster.load(config);
+  if (roster) {
+    const teammates = roster.peers.map(p => `${p.name} (${p.role})`).join(', ') || '(none)';
+    console.log(`  Team: I am ${roster.self.name} (${roster.self.role}); teammates: ${teammates}`);
+  }
 
-  // Shared mutable state for passing chatId to tool handlers
-  const state = { chatId: '' };
+  const cronScheduler = new CronScheduler(config);
+  const webhookServer = new WebhookServer(config, roster);
+
+  // Shared mutable state for passing chatId + peer context to tool handlers
+  const state: AgentState = { chatId: '' };
 
   // Late-binding references (needed because telegram/gateway are created after toolServer)
   let telegramRef: TelegramAdapter | undefined;
@@ -49,16 +58,21 @@ async function main() {
       return telegramRef.requestApproval(chatId, description);
     },
     isApprovalEnabled: (chatId) => gatewayRef?.getApproval(chatId) ?? false,
-  });
+    getPeerContext: () => state.peer,
+    mirrorPeer: async (text) => {
+      if (!roster || !telegramRef) return;
+      await telegramRef.sendMessage(Number(roster.groupChatId), text);
+    },
+  }, roster);
 
-  const agent = new Agent(config, memory, toolServer, state);
+  const agent = new Agent(config, memory, toolServer, state, roster);
 
-  const gateway = new Gateway(config, sessions, agent, memory);
+  const gateway = new Gateway(config, sessions, agent, memory, roster);
   gatewayRef = gateway;
   gateway.setCronScheduler(cronScheduler);
   gateway.setWebhookServer(webhookServer);
 
-  const telegram = new TelegramAdapter(config, gateway);
+  const telegram = new TelegramAdapter(config, gateway, roster);
   telegramRef = telegram;
 
   // Wire cron jobs to send results via Telegram
@@ -81,6 +95,18 @@ async function main() {
       console.error(`Webhook ${webhook.id} failed:`, err);
     }
   });
+
+  // Wire inbound peer messages: process via the gateway, post the reply to the group.
+  if (roster) {
+    webhookServer.setPeerHandler(async (env) => {
+      try {
+        const response = await gateway.handlePeerMessage(env);
+        if (response) await telegram.sendMessage(Number(roster.groupChatId), response);
+      } catch (err) {
+        console.error(`Peer message ${env.msgId} failed:`, err);
+      }
+    });
+  }
 
   await cronScheduler.init();
   await webhookServer.init();

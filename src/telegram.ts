@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import type { Config, Effort } from './types.js';
 import { MODELS, MODEL_DISPLAY, EFFORT_LEVELS, type Gateway } from './gateway.js';
 import { runUpdate } from './update.js';
+import type { Roster } from './roster.js';
 
 const MAX_MESSAGE_LENGTH = 4096;
 /** Reserve headroom for HTML expansion when chunking raw markdown */
@@ -18,9 +19,51 @@ export class TelegramAdapter {
   private bot: Bot;
   private pendingApprovals = new Map<string, PendingApproval>();
 
-  constructor(private config: Config, private gateway: Gateway) {
+  constructor(private config: Config, private gateway: Gateway, private roster: Roster | null = null) {
     this.bot = new Bot(config.telegramBotToken);
     this.setupHandlers();
+  }
+
+  /**
+   * Decide whether to act on an incoming message.
+   * - No roster (single-agent) → always act (classic behavior).
+   * - Private chat → always act.
+   * - Group/supergroup → act only when addressed (mention, name, id, or reply to me).
+   */
+  private shouldHandle(ctx: Context): boolean {
+    if (!this.roster) return true;
+    const type = ctx.chat?.type;
+    if (type !== 'group' && type !== 'supergroup') return true;
+    return this.isAddressed(ctx);
+  }
+
+  private isAddressed(ctx: Context): boolean {
+    // Reply to one of my own messages counts as addressing me.
+    const reply = ctx.message?.reply_to_message;
+    if (reply?.from?.id && ctx.me?.id && reply.from.id === ctx.me.id) return true;
+
+    const text = (ctx.message?.text || ctx.message?.caption || '').toLowerCase();
+    if (!text) return false;
+
+    const username = ctx.me?.username?.toLowerCase();
+    if (username && text.includes(`@${username}`)) return true;
+
+    const self = this.roster!.self;
+    return [self.id, self.name].some(tok => {
+      const t = tok.toLowerCase().trim();
+      return t.length > 0 && new RegExp(`\\b${escapeRegex(t)}\\b`).test(text);
+    });
+  }
+
+  /** Strip a standalone @mention of this bot from group text. */
+  private stripMention(ctx: Context, text: string): string {
+    const username = ctx.me?.username;
+    if (!username) return text;
+    const stripped = text
+      .replace(new RegExp(`@${escapeRegex(username)}\\b`, 'gi'), '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return stripped || text;
   }
 
   private setupHandlers(): void {
@@ -221,8 +264,9 @@ export class TelegramAdapter {
 
     // Text messages
     this.bot.on('message:text', async (ctx) => {
+      if (!this.shouldHandle(ctx)) return;
       const chatId = ctx.chat.id.toString();
-      const text = ctx.message.text;
+      const text = this.stripMention(ctx, ctx.message.text);
 
       await ctx.replyWithChatAction('typing');
       const typingInterval = setInterval(() => {
@@ -329,6 +373,7 @@ export class TelegramAdapter {
 
     // Photos with optional caption
     this.bot.on('message:photo', async (ctx) => {
+      if (!this.shouldHandle(ctx)) return;
       const chatId = ctx.chat.id.toString();
       const caption = ctx.message.caption || 'What do you see in this image?';
 
@@ -359,6 +404,7 @@ export class TelegramAdapter {
 
     // Voice messages
     this.bot.on('message:voice', async (ctx) => {
+      if (!this.shouldHandle(ctx)) return;
       const chatId = ctx.chat.id.toString();
       const caption = ctx.message.caption || undefined;
 
@@ -385,6 +431,7 @@ export class TelegramAdapter {
 
     // Video notes (round video messages) — treat like voice
     this.bot.on('message:video_note', async (ctx) => {
+      if (!this.shouldHandle(ctx)) return;
       const chatId = ctx.chat.id.toString();
 
       await ctx.replyWithChatAction('typing');
@@ -494,6 +541,11 @@ export class TelegramAdapter {
       this.pendingApprovals.set(id, { resolve, timeout });
     });
   }
+}
+
+/** Escape a string for safe use inside a RegExp. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Convert Markdown to Telegram-safe HTML */

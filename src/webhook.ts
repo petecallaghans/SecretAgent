@@ -1,23 +1,32 @@
 import http from 'http';
 import crypto from 'crypto';
+import { randomUUID } from 'crypto';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-import type { Config, WebhookDef } from './types.js';
+import type { Config, WebhookDef, PeerMessage } from './types.js';
+import type { Roster } from './roster.js';
+
+const PEER_PATH = '/peer';
 
 export class WebhookServer {
   private server: http.Server;
   private webhooks = new Map<string, WebhookDef>();
   private webhookFile: string;
   private onFire?: (webhook: WebhookDef, payload: string) => Promise<void>;
+  private onPeer?: (env: PeerMessage) => Promise<void>;
 
-  constructor(private config: Config) {
+  constructor(private config: Config, private roster: Roster | null = null) {
     this.webhookFile = path.join(config.dataDir, 'webhooks.json');
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
   }
 
   setFireHandler(handler: (webhook: WebhookDef, payload: string) => Promise<void>): void {
     this.onFire = handler;
+  }
+
+  setPeerHandler(handler: (env: PeerMessage) => Promise<void>): void {
+    this.onPeer = handler;
   }
 
   async init(): Promise<void> {
@@ -107,6 +116,12 @@ export class WebhookServer {
       const body = Buffer.concat(chunks).toString('utf-8');
       const urlPath = req.url || '/';
 
+      // Private agent↔agent peer channel — handled before the webhook map.
+      if (urlPath === PEER_PATH) {
+        this.handlePeer(req, res, body);
+        return;
+      }
+
       // Find matching webhook by path
       const webhook = Array.from(this.webhooks.values()).find(w => w.path === urlPath);
       if (!webhook) {
@@ -139,6 +154,63 @@ export class WebhookServer {
       this.fireWebhook(webhook, body).catch(err => {
         console.error(`Webhook ${webhook.id} processing error:`, err);
       });
+    });
+  }
+
+  /** Handle an inbound peer message: Bearer auth, validate envelope, fire async. */
+  private handlePeer(req: http.IncomingMessage, res: http.ServerResponse, body: string): void {
+    const sendJson = (status: number, obj: unknown) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(obj));
+    };
+
+    if (!this.roster || !this.onPeer) {
+      sendJson(404, { error: 'Peer channel not enabled.' });
+      return;
+    }
+
+    // Bearer auth against the shared secret (constant-time compare).
+    const auth = req.headers['authorization'] || '';
+    const expected = `Bearer ${this.roster.sharedSecret}`;
+    const authBuf = Buffer.from(auth);
+    const expBuf = Buffer.from(expected);
+    if (
+      !this.roster.sharedSecret ||
+      authBuf.length !== expBuf.length ||
+      !crypto.timingSafeEqual(authBuf, expBuf)
+    ) {
+      sendJson(401, { error: 'Unauthorized' });
+      return;
+    }
+
+    let env: PeerMessage;
+    try {
+      const parsed = JSON.parse(body) as Partial<PeerMessage>;
+      if (typeof parsed.from !== 'string' || typeof parsed.message !== 'string') {
+        sendJson(400, { error: 'Invalid envelope: "from" and "message" are required.' });
+        return;
+      }
+      const msgId = typeof parsed.msgId === 'string' ? parsed.msgId : randomUUID();
+      env = {
+        msgId,
+        from: parsed.from,
+        to: typeof parsed.to === 'string' ? parsed.to : this.roster.self.id,
+        message: parsed.message,
+        payload: parsed.payload,
+        replyTo: typeof parsed.replyTo === 'string' ? parsed.replyTo : undefined,
+        chainId: typeof parsed.chainId === 'string' ? parsed.chainId : msgId,
+        hops: typeof parsed.hops === 'number' ? parsed.hops : 0,
+      };
+    } catch {
+      sendJson(400, { error: 'Invalid JSON.' });
+      return;
+    }
+
+    // Accept now; the reply (if any) returns async via a peer message and/or group post.
+    sendJson(202, { accepted: true, msgId: env.msgId });
+    console.log(`Peer message accepted: ${env.msgId} from ${env.from} (chain ${env.chainId}, hop ${env.hops})`);
+    this.onPeer(env).catch(err => {
+      console.error(`Peer message ${env.msgId} processing error:`, err);
     });
   }
 

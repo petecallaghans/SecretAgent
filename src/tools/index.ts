@@ -1,11 +1,17 @@
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import { executeShell } from './shell.js';
 import { fetchUrl, webSearch } from './web.js';
 import { readFileContent, writeFileContent, listFiles, resolveSafe } from './files.js';
 import { runDelegate } from './delegate.js';
-import type { Config } from '../types.js';
+import { deliverPeerMessage } from '../peer.js';
+import type { Config, PeerContext, PeerMessage } from '../types.js';
 import type { Memory } from '../memory.js';
+import type { Roster } from '../roster.js';
+
+/** Hop cap for peer chains — backstop against runaway agent↔agent loops. */
+const MAX_HOPS = parseInt(process.env.MAX_HOPS || '8', 10);
 
 export interface ToolCallbacks {
   cronHandler: (action: string, input: Record<string, unknown>) => Promise<string>;
@@ -14,12 +20,17 @@ export interface ToolCallbacks {
   requestApproval: (chatId: string, description: string) => Promise<boolean>;
   isApprovalEnabled: (chatId: string) => boolean;
   webhookHandler: (action: string, input: Record<string, unknown>) => Promise<string>;
+  /** Peer context for the active run (set when processing an inbound peer message). */
+  getPeerContext?: () => PeerContext | undefined;
+  /** Post a one-liner to the shared group so humans see agent↔agent handoffs. */
+  mirrorPeer?: (text: string) => Promise<void>;
 }
 
 export function createToolServer(
   config: Config,
   memory: Memory,
   callbacks: ToolCallbacks,
+  roster: Roster | null = null,
 ) {
   const tools = [
     tool(
@@ -232,7 +243,69 @@ export function createToolServer(
         return { content: [{ type: 'text' as const, text: result }] };
       },
     ),
+    // Peer messaging — only registered when a team roster is configured.
+    ...(roster ? [buildMessagePeerTool(roster, callbacks)] : []),
   ];
 
   return createSdkMcpServer({ name: 'secret-agent-tools', tools });
+}
+
+/** message_peer tool: hand off / reply to a teammate over the private peer channel. */
+function buildMessagePeerTool(roster: Roster, callbacks: ToolCallbacks) {
+  const validPeers = () =>
+    roster.peers.map(p => `${p.id} (${p.name}, ${p.role})`).join('; ') || '(none)';
+
+  return tool(
+    'message_peer',
+    [
+      'Send a message to a teammate agent over the private peer channel.',
+      'Use this to hand off work, ask a question, or reply to a teammate.',
+      'Their reply arrives LATER as a new incoming message — do not wait for a return value here.',
+      `Valid teammates: ${validPeers()}.`,
+      'The handoff is mirrored to the group so humans can follow along.',
+    ].join(' '),
+    {
+      to: z.string().describe('Teammate id or name (e.g. "bob" or "Bob")'),
+      message: z.string().describe('Natural-language message to the teammate'),
+      payload: z.unknown().optional().describe('Optional structured data to attach'),
+    },
+    async ({ to, message, payload }) => {
+      const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+
+      const peer = roster.resolvePeer(to);
+      if (!peer) return text(`Unknown teammate "${to}". Valid teammates: ${validPeers()}.`);
+      if (peer.id === roster.self.id) return text('You cannot message yourself.');
+
+      const ctx = callbacks.getPeerContext?.();
+      const hops = (ctx?.hops ?? 0) + 1;
+      if (hops > MAX_HOPS) {
+        await callbacks.mirrorPeer?.(
+          `⚠️ Hop limit (${MAX_HOPS}) reached on this chain — needs a human. Message to ${peer.name} not sent.`,
+        );
+        return text(`Hop limit (${MAX_HOPS}) reached. Chain halted — a human must step in.`);
+      }
+
+      const envelope: PeerMessage = {
+        msgId: randomUUID(),
+        from: roster.self.id,
+        to: peer.id,
+        message,
+        payload,
+        replyTo: ctx?.replyTo,
+        chainId: ctx?.chainId ?? randomUUID(),
+        hops,
+      };
+
+      try {
+        await deliverPeerMessage(peer, envelope, roster.sharedSecret);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await callbacks.mirrorPeer?.(`⚠️ Couldn't reach ${peer.name}: ${msg}`);
+        return text(`Failed to deliver message to ${peer.name}: ${msg}`);
+      }
+
+      await callbacks.mirrorPeer?.(`→ ${peer.name}: ${message}`);
+      return text(`Message sent to ${peer.name}. Their reply will arrive as a new message.`);
+    },
+  );
 }
