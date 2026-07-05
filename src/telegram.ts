@@ -116,7 +116,7 @@ export class TelegramAdapter {
         return;
       }
 
-      this.gateway.setModel(chatId, modelId);
+      await this.gateway.setModel(chatId, modelId);
       await this.gateway.resetSession(chatId);
       const display = MODEL_DISPLAY[modelId] || modelId;
       await ctx.reply(`Switched to ${display}. Session reset.`);
@@ -138,13 +138,14 @@ export class TelegramAdapter {
     // /effort - view or set effort level
     this.bot.command('effort', async (ctx) => {
       const arg = ctx.match?.trim().toLowerCase() as Effort | undefined;
-      const current = this.gateway.getEffort();
+      const chatId = ctx.chat.id.toString();
+      const current = this.gateway.getEffort(chatId);
 
       if (!arg) {
         const levels = EFFORT_LEVELS
           .map(l => `  ${l === current ? '→' : ' '} ${l}`)
           .join('\n');
-        await ctx.reply(`Effort: ${current}\n\nLevels:\n${levels}\n\nSwitch: /effort <level>`);
+        await ctx.reply(`Effort (this chat): ${current}\n\nLevels:\n${levels}\n\nSwitch: /effort <level>`);
         return;
       }
 
@@ -153,8 +154,8 @@ export class TelegramAdapter {
         return;
       }
 
-      this.gateway.setEffort(arg as Effort);
-      await ctx.reply(`Effort set to ${arg}.`);
+      await this.gateway.setEffort(chatId, arg as Effort);
+      await ctx.reply(`Effort set to ${arg} for this chat.`);
     });
 
     // /think - toggle extended thinking

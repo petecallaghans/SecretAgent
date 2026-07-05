@@ -9,12 +9,12 @@ import type { Roster } from './roster.js';
 
 const SERVER_NAME = 'secret-agent-tools';
 
-/** Scale maxTurns by effort — simple chats shouldn't loop through many tool calls */
+/** Scale maxTurns by effort — a workhorse needs room; cost is governed by model tier + subagents */
 const EFFORT_MAX_TURNS: Record<string, number> = {
-  low: 5,
-  medium: 10,
-  high: 20,
-  max: 30,
+  low: 8,
+  medium: 15,
+  high: 25,
+  max: 40,
 };
 
 /** Scale maxTokens by effort — shorter responses for simple exchanges */
@@ -250,6 +250,7 @@ export class Agent {
     model?: string,
     onStream?: StreamCallback,
     peerCtx?: PeerContext,
+    effortOverride?: string,
   ): Promise<{ response: string; sessionId: string }> {
     // Set chatId and peer context together so tools see a consistent view for this run.
     this.state.chatId = chatId;
@@ -274,7 +275,7 @@ export class Agent {
       ? { type: 'disabled' as const }
       : { type: 'adaptive' as const };
 
-    const effort = this.config.effort;
+    const effort = effortOverride || this.config.effort;
     const maxTurns = EFFORT_MAX_TURNS[effort] ?? 10;
     const maxTokens = Math.min(
       EFFORT_MAX_TOKENS[effort] ?? 4096,

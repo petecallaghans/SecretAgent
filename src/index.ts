@@ -5,6 +5,7 @@ delete process.env.CLAUDECODE;
 delete process.env.CLAUDE_CODE_ENTRYPOINT;
 import { loadConfig } from './types.js';
 import { SessionManager } from './sessions.js';
+import { PrefsStore } from './prefs.js';
 import { Memory } from './memory.js';
 import { Agent } from './agent.js';
 import { CronScheduler } from './cron.js';
@@ -25,6 +26,9 @@ async function main() {
   // Initialize components
   const sessions = new SessionManager(config);
   await sessions.init();
+
+  const prefs = new PrefsStore(config);
+  await prefs.init();
 
   const memory = new Memory(config);
   await memory.init();
@@ -68,7 +72,7 @@ async function main() {
 
   const agent = new Agent(config, memory, toolServer, state, roster);
 
-  const gateway = new Gateway(config, sessions, agent, memory, roster);
+  const gateway = new Gateway(config, sessions, agent, memory, roster, prefs);
   gatewayRef = gateway;
   gateway.setCronScheduler(cronScheduler);
   gateway.setWebhookServer(webhookServer);

@@ -8,6 +8,7 @@ import type { Memory } from './memory.js';
 import type { CronScheduler } from './cron.js';
 import type { WebhookServer } from './webhook.js';
 import type { Roster } from './roster.js';
+import type { PrefsStore } from './prefs.js';
 
 import type { Effort, ThinkingMode } from './types.js';
 
@@ -58,7 +59,6 @@ export class Gateway {
   }>>();
   private cronScheduler?: CronScheduler;
   private webhookServer?: WebhookServer;
-  private chatModels = new Map<string, string>();
   private approvalEnabled = new Map<string, boolean>();
 
   constructor(
@@ -67,6 +67,7 @@ export class Gateway {
     private agent: Agent,
     private memory: Memory,
     private roster: Roster | null = null,
+    private prefs: PrefsStore | null = null,
   ) {}
 
   setCronScheduler(scheduler: CronScheduler): void {
@@ -134,9 +135,10 @@ export class Gateway {
     const key = sessionKey ?? chatId;
     const sessionId = this.sessions.getSessionId(key);
     const model = this.selectModel(chatId, text, source);
+    const effort = this.selectEffort(chatId, text, source);
     const cleanText = source === 'user' ? stripPrefix(text) : text;
     const { response, sessionId: newSessionId } = await this.agent.run(
-      cleanText, sessionId, chatId, model, onStream, peerCtx,
+      cleanText, sessionId, chatId, model, onStream, peerCtx, effort,
     );
 
     if (source === 'system') {
@@ -204,23 +206,36 @@ export class Gateway {
     if (source === 'cron' || source === 'webhook' || source === 'system') {
       return this.config.modelLight;
     }
-    return this.chatModels.get(chatId) || this.config.modelDefault;
+    return this.prefs?.get(chatId).model || this.config.modelDefault;
   }
 
-  setModel(chatId: string, model: string): void {
-    this.chatModels.set(chatId, model);
+  /**
+   * Effort per message: /deep bumps to high for that message; otherwise the
+   * per-chat preference, falling back to the config default. Background
+   * sources (cron/webhook/system) stay at the config default.
+   */
+  selectEffort(chatId: string, message: string, source: MessageSource): Effort {
+    if (source === 'user' && /^\/deep(\s|$)/.test(message)) return 'high';
+    if (source === 'user' || source === 'voice') {
+      return this.prefs?.get(chatId).effort || this.config.effort;
+    }
+    return this.config.effort;
+  }
+
+  async setModel(chatId: string, model: string): Promise<void> {
+    await this.prefs?.set(chatId, { model });
   }
 
   getModel(chatId: string): string {
-    return this.chatModels.get(chatId) || this.config.modelDefault;
+    return this.prefs?.get(chatId).model || this.config.modelDefault;
   }
 
-  setEffort(effort: Effort): void {
-    this.config.effort = effort;
+  async setEffort(chatId: string, effort: Effort): Promise<void> {
+    await this.prefs?.set(chatId, { effort });
   }
 
-  getEffort(): Effort {
-    return this.config.effort;
+  getEffort(chatId: string): Effort {
+    return this.prefs?.get(chatId).effort || this.config.effort;
   }
 
   setThinking(mode: ThinkingMode): void {

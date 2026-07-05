@@ -99,7 +99,7 @@ export function loadConfig(): Config {
     openaiDelegateNano: process.env.OPENAI_DELEGATE_NANO || 'gpt-5.4-nano',
     openaiDelegateMini: process.env.OPENAI_DELEGATE_MINI || 'gpt-5-mini',
     openaiDelegateSmart: process.env.OPENAI_DELEGATE_SMART || 'gpt-5.4-mini',
-    effort: (process.env.EFFORT as Effort) || 'low',
+    effort: (process.env.EFFORT as Effort) || 'medium',
     thinking: (process.env.THINKING as ThinkingMode) || 'disabled',
   };
 }
