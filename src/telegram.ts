@@ -5,6 +5,7 @@ import type { Config, Effort } from './types.js';
 import { MODELS, MODEL_DISPLAY, EFFORT_LEVELS, type Gateway } from './gateway.js';
 import { runUpdate } from './update.js';
 import type { Roster } from './roster.js';
+import type { ChannelAdapter } from './channels/types.js';
 
 const MAX_MESSAGE_LENGTH = 4096;
 /** Reserve headroom for HTML expansion when chunking raw markdown */
@@ -15,7 +16,8 @@ interface PendingApproval {
   timeout: ReturnType<typeof setTimeout>;
 }
 
-export class TelegramAdapter {
+export class TelegramAdapter implements ChannelAdapter {
+  readonly prefix = 'telegram';
   private bot: Bot;
   private pendingApprovals = new Map<string, PendingApproval>();
 

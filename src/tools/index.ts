@@ -108,7 +108,7 @@ export function createToolServer(
     ),
     tool(
       'send_file',
-      'Send a file from the workspace to the user via Telegram.',
+      'Send a file from the workspace to the user in the current chat.',
       {
         path: z.string().describe('File path relative to workspace'),
         caption: z.string().optional().describe('Optional caption for the file'),
@@ -197,7 +197,7 @@ export function createToolServer(
           id,
           schedule,
           prompt,
-          chatId: Number(callbacks.getChatId()) || 0,
+          chatId: callbacks.getChatId(),
         });
         return { content: [{ type: 'text' as const, text: result }] };
       },
@@ -245,7 +245,7 @@ export function createToolServer(
           path,
           prompt,
           secret,
-          chatId: Number(callbacks.getChatId()) || 0,
+          chatId: callbacks.getChatId(),
         });
         return { content: [{ type: 'text' as const, text: result }] };
       },

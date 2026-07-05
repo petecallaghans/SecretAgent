@@ -28,7 +28,7 @@ export class CronScheduler {
     }
   }
 
-  async create(schedule: string, prompt: string, chatId: number): Promise<CronJobDef> {
+  async create(schedule: string, prompt: string, chatId: number | string): Promise<CronJobDef> {
     if (!cron.validate(schedule)) {
       throw new Error(`Invalid cron schedule: ${schedule}`);
     }
@@ -61,7 +61,7 @@ export class CronScheduler {
         const def = await this.create(
           input.schedule as string,
           input.prompt as string,
-          (input.chatId as number) || 0,
+          (input.chatId as number | string) || 0,
         );
         return `Created cron job: ${def.id} (${def.schedule}) - "${def.prompt}"`;
       }

@@ -47,7 +47,7 @@ export class WebhookServer {
     });
   }
 
-  async create(webhookPath: string, prompt: string, chatId: number, secret?: string): Promise<WebhookDef> {
+  async create(webhookPath: string, prompt: string, chatId: number | string, secret?: string): Promise<WebhookDef> {
     // Ensure path starts with /
     const normalizedPath = webhookPath.startsWith('/') ? webhookPath : `/${webhookPath}`;
     const id = `wh_${Date.now().toString(36)}`;
@@ -77,7 +77,7 @@ export class WebhookServer {
         const def = await this.create(
           input.path as string,
           input.prompt as string,
-          (input.chatId as number) || 0,
+          (input.chatId as number | string) || 0,
           input.secret as string | undefined,
         );
         return `Created webhook: ${def.id} → ${def.path}`;

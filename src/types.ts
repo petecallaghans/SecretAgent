@@ -30,7 +30,8 @@ export interface CronJobDef {
   id: string;
   schedule: string;
   prompt: string;
-  chatId: number;
+  /** Namespaced chat id; legacy entries hold bare Telegram numbers. */
+  chatId: number | string;
   enabled: boolean;
 }
 
@@ -38,7 +39,8 @@ export interface WebhookDef {
   id: string;
   path: string;
   prompt: string;
-  chatId: number;
+  /** Namespaced chat id; legacy entries hold bare Telegram numbers. */
+  chatId: number | string;
   secret?: string;
 }
 
