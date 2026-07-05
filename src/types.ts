@@ -12,6 +12,12 @@ export interface Config {
   dataDir: string;
   shellAllowlist: string[];
   webhookPort: number;
+  braveApiKey: string;
+  memoryDistillCron: string;
+  sessionMaxMessages: number;
+  slackBotToken: string;
+  slackAppToken: string;
+  slackAllowedUsers: string[];
   openaiApiKey: string;
   openaiDelegateNano: string;
   openaiDelegateMini: string;
@@ -80,6 +86,15 @@ export function loadConfig(): Config {
       .map(s => s.trim())
       .filter(Boolean),
     webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
+    braveApiKey: process.env.BRAVE_API_KEY || '',
+    memoryDistillCron: process.env.MEMORY_DISTILL_CRON ?? '30 3 * * *',
+    sessionMaxMessages: parseInt(process.env.SESSION_MAX_MESSAGES || '40', 10),
+    slackBotToken: process.env.SLACK_BOT_TOKEN || '',
+    slackAppToken: process.env.SLACK_APP_TOKEN || '',
+    slackAllowedUsers: (process.env.SLACK_ALLOWED_USERS || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean),
     openaiApiKey: process.env.OPENAI_API_KEY || '',
     openaiDelegateNano: process.env.OPENAI_DELEGATE_NANO || 'gpt-5.4-nano',
     openaiDelegateMini: process.env.OPENAI_DELEGATE_MINI || 'gpt-5-mini',

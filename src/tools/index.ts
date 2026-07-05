@@ -60,10 +60,10 @@ export function createToolServer(
     ),
     tool(
       'web_search',
-      'Search the web via DuckDuckGo and return results.',
+      'Search the web and return results (title, URL, snippet). Uses Brave Search when a key is configured, otherwise DuckDuckGo.',
       { query: z.string().describe('The search query') },
       async ({ query }) => {
-        const result = await webSearch(query);
+        const result = await webSearch(query, config);
         return { content: [{ type: 'text' as const, text: result }] };
       },
     ),

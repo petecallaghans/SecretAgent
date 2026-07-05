@@ -4,11 +4,22 @@ import type { Config } from '../types.js';
 const DEFAULT_TIMEOUT = 30_000;
 const MAX_OUTPUT = 10_000;
 
+/**
+ * Shell metacharacters that would let a command chain past the allowlist
+ * (e.g. `ls; rm -rf ~`). Only enforced when an allowlist is configured.
+ * The allowlist is defense-in-depth, not a sandbox — a permitted binary can
+ * still do anything that binary can do.
+ */
+const METACHAR_PATTERN = /[;|&`$<>\n]/;
+
 export async function executeShell(command: string, config: Config): Promise<string> {
   if (config.shellAllowlist.length > 0) {
     const cmd = command.trim().split(/\s+/)[0];
     if (!config.shellAllowlist.includes(cmd)) {
       return `Error: Command '${cmd}' not in allowlist. Allowed: ${config.shellAllowlist.join(', ')}`;
+    }
+    if (METACHAR_PATTERN.test(command)) {
+      return 'Error: Shell metacharacters (; | & ` $ < > newline) are not allowed when an allowlist is active. Run one plain command at a time.';
     }
   }
 

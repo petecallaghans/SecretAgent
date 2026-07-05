@@ -139,7 +139,10 @@ export class WebhookServer {
           return;
         }
         const expected = 'sha256=' + crypto.createHmac('sha256', webhook.secret).update(body).digest('hex');
-        if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+        const sigBuf = Buffer.from(signature);
+        const expBuf = Buffer.from(expected);
+        // Length check first — timingSafeEqual throws on mismatched lengths
+        if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
           res.writeHead(403, { 'Content-Type': 'text/plain' });
           res.end('Invalid signature');
           return;

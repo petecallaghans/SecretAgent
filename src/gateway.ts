@@ -17,14 +17,18 @@ export const MODELS: Record<string, string> = {
   'haiku-4-5': 'claude-haiku-4-5',
   'sonnet-4-5': 'claude-sonnet-4-5',
   'sonnet-4-6': 'claude-sonnet-4-6',
+  'sonnet-5': 'claude-sonnet-5',
   'opus-4-6': 'claude-opus-4-6',
+  'opus-4-8': 'claude-opus-4-8',
 };
 
 export const MODEL_DISPLAY: Record<string, string> = {
   'claude-haiku-4-5': 'Haiku 4.5',
   'claude-sonnet-4-5': 'Sonnet 4.5',
   'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-sonnet-5': 'Sonnet 5',
   'claude-opus-4-6': 'Opus 4.6',
+  'claude-opus-4-8': 'Opus 4.8',
 };
 
 export const EFFORT_LEVELS: Effort[] = ['low', 'medium', 'high', 'max'];
@@ -156,8 +160,9 @@ export class Gateway {
   /**
    * Route a message to the appropriate model tier.
    *   1. User /deep or /light prefix → deep/light override (single message).
-   *   2. cron/webhook/voice → light (formatting / transcription relay).
-   *   3. Per-chat session default set via /model.
+   *   2. cron/webhook → light (background relay work).
+   *   3. Per-chat session default set via /model. Voice is real user input,
+   *      so transcripts get the same model as typed messages.
    *   4. config.modelDefault.
    */
   selectModel(chatId: string, message: string, source: MessageSource): string {
@@ -165,7 +170,7 @@ export class Gateway {
       if (/^\/deep(\s|$)/.test(message)) return this.config.modelDeep;
       if (/^\/light(\s|$)/.test(message)) return this.config.modelLight;
     }
-    if (source === 'cron' || source === 'webhook' || source === 'voice') {
+    if (source === 'cron' || source === 'webhook') {
       return this.config.modelLight;
     }
     return this.chatModels.get(chatId) || this.config.modelDefault;
