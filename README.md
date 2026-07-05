@@ -58,6 +58,9 @@ All config lives in `.env` (created by setup):
 |-------------------------|----------------------|-------------------------------------------------------------------|
 | `TELEGRAM_BOT_TOKEN`    | *(required)*         | From @BotFather                                                   |
 | `ALLOWED_USERS`         | *(empty = all)*      | Comma-separated Telegram user IDs                                 |
+| `SLACK_BOT_TOKEN`       | *(optional)*         | Slack bot token (`xoxb-…`); with app token enables Slack          |
+| `SLACK_APP_TOKEN`       | *(optional)*         | Slack app-level token (`xapp-…`, `connections:write`)             |
+| `SLACK_ALLOWED_USERS`   | *(empty = all)*      | Comma-separated Slack user IDs                                    |
 | `MODEL_LIGHT`           | `claude-haiku-4-5`   | Cheap model for cron, webhooks, voice relay                       |
 | `MODEL_DEFAULT`         | `claude-opus-4-6`    | Main user-facing model (also fallback for legacy `MODEL` var)     |
 | `MODEL_DEEP`            | `claude-opus-4-6`    | Used by `/deep` prefix                                            |
@@ -66,8 +69,11 @@ All config lives in `.env` (created by setup):
 | `OPENAI_DELEGATE_MINI`  | `gpt-5-mini`         | Default helper for delegated work                                 |
 | `OPENAI_DELEGATE_SMART` | `gpt-5.4-mini`       | Helper for harder subtasks                                        |
 | `MAX_TOKENS`            | `8192`               | Max response tokens                                               |
-| `EFFORT`                | `low`                | low \| medium \| high \| max — caps turns and tokens per query    |
+| `EFFORT`                | `medium`             | low \| medium \| high \| max — caps turns and tokens per query    |
 | `THINKING`              | `disabled`           | adaptive \| disabled — extended thinking mode                     |
+| `BRAVE_API_KEY`         | *(optional)*         | Real web search via Brave; falls back to DuckDuckGo scrape        |
+| `MEMORY_DISTILL_CRON`   | `30 3 * * *`         | Nightly memory distillation schedule (empty = off)                |
+| `SESSION_MAX_MESSAGES`  | `40`                 | Exchanges before a session is summarized + rotated (0 = off)      |
 | `WORKSPACE_DIR`         | `./workspace`        | Agent's working directory                                         |
 | `DATA_DIR`              | `./data`             | Session, cron, and webhook data                                   |
 | `SHELL_ALLOWLIST`       | *(empty = all)*      | Comma-separated allowed shell commands                            |
@@ -88,17 +94,19 @@ npm start        # run compiled JS (production)
 ## How It Works
 
 ```
-Telegram → TelegramAdapter → Gateway → Agent → Claude (via Agent SDK)
-                                ↕            ↕
-                          SessionManager   MCP Tools
-                          (sessions.json)  (shell, web, files, memory, cron, delegate)
+Telegram ─┐
+          ├→ ChannelRegistry → Gateway → Agent → Claude (via Agent SDK)
+Slack ────┘                       ↕          ↕
+                            SessionManager  MCP Tools + Haiku subagents
+                            (sessions.json) (shell, web, files, memory, cron, delegate)
 ```
 
 - **No Anthropic API key needed** — uses Claude Code's OAuth flow (requires Max or Team subscription)
-- **Session persistence** — conversations resume across bot restarts
-- **Memory** — long-term memory in `workspace/memory.md`, daily logs in `workspace/logs/`
+- **Session persistence** — conversations resume across bot restarts; long sessions auto-rotate (summary → daily log → fresh context)
+- **Memory** — `workspace/memory.md` is a small index; substance lives in `workspace/memory/topics/*.md`; daily logs in `workspace/memory/`; everything searchable via the `memory_search` tool; a nightly job distills yesterday's log into topics
 - **Personality** — defined in `workspace/soul.md`, rewritten during onboarding
-- **Tools** — shell, web fetch/search, file I/O, cron, webhooks, delegate (OpenAI helper)
+- **Tools** — shell, web fetch/search, file I/O, memory search, cron, webhooks, delegate (OpenAI helper), plus native `researcher`/`worker` Haiku subagents
+- **Slack** — create a Slack app with Socket Mode enabled, add bot scopes `chat:write`, `files:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write`, subscribe to `message.im` + `app_mention` events, then set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`. The agent answers DMs and @mentions; no public URL needed
 
 ## Model Routing & Cost Control
 
@@ -107,14 +115,17 @@ To keep Claude Max plan usage low, messages are routed across three Claude tiers
 | Source                          | Model used                              |
 |---------------------------------|-----------------------------------------|
 | User chat (default)             | `MODEL_DEFAULT` (Opus 4.6)              |
+| Voice note (post-Whisper)       | Chat default — voice is real user input |
 | Cron job firing                 | `MODEL_LIGHT` (Haiku)                   |
 | Webhook firing                  | `MODEL_LIGHT` (Haiku)                   |
-| Voice note (post-Whisper)       | `MODEL_LIGHT` (Haiku)                   |
-| `/deep <msg>` prefix            | `MODEL_DEEP` (Opus)                     |
+| Maintenance (rotation, distill) | `MODEL_LIGHT` (Haiku)                   |
+| `/deep <msg>` prefix            | `MODEL_DEEP` (Opus) + effort `high`     |
 | `/light <msg>` prefix           | `MODEL_LIGHT` (Haiku)                   |
-| `/model <name>` (session)       | Whatever the user set                   |
+| `/model <name>` (per chat)      | Whatever the user set (persisted)       |
 
-The main agent also has a **`delegate` tool** that calls OpenAI (gpt-5-mini default) for cheap subtasks — parsing tool output, summarizing fetched pages, extracting fields, classifying intent, formatting. Opus synthesizes the final answer; the helper produces raw intermediate output. This keeps large raw outputs out of the conversation history that re-enters input on every following turn, cutting Max-plan token usage significantly on tool-heavy workloads.
+The main cost lever is **native subagents**: the agent can spawn a `researcher` (web search / fetch / memory mining) or a `worker` (shell + file chores) that run on Haiku in throwaway contexts, covered by the same Max-plan OAuth. Grunt work and large raw outputs stay out of the main conversation history that re-enters input on every turn.
+
+There is also a **`delegate` tool** that ships pure text-transform subtasks (reformatting, extraction, classification) to OpenAI (gpt-5-mini default) — useful as an escape hatch, but subagents are preferred since they have tools and stay on your plan.
 
 ## Running a Team (multi-agent collaboration)
 

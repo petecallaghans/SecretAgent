@@ -198,8 +198,8 @@ export function formatForSlack(text: string): string {
 
   // Links: [text](url) → <url|text>
   out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<$2|$1>');
-  // Headings → bold lines
-  out = out.replace(/^#{1,6}\s+(.+)$/gm, '*$1*');
+  // Headings → bold lines (placeholder so the italic pass below can't eat them)
+  out = out.replace(/^#{1,6}\s+(.+)$/gm, '\x00B\x00$1\x00B\x00');
   // Bold: ** → placeholder, then italic single * → _, then restore bold as *
   out = out.replace(/\*\*(.+?)\*\*/g, '\x00B\x00$1\x00B\x00');
   out = out.replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, '_$1_');
