@@ -1,15 +1,16 @@
 # SecretAgent
 
-Your personal AI assistant on Telegram, powered by Claude (with OpenAI as a cheap helper). It personalizes itself on first message — choosing a name, personality, and learning about you through conversation.
+Your personal AI assistant on Telegram and Slack, powered by Claude. It personalizes itself on first message — choosing a name, personality, and learning about you through conversation — and it actually remembers: a topic-file memory system with search and nightly distillation means facts survive long past the conversation they came from.
 
-Claude Opus drives the conversation. For routine subtasks (parsing, summarizing, extracting, formatting, transcribing voice) the agent hands off to OpenAI models via a built-in `delegate` tool and Whisper. This keeps Claude Max plan token usage to a minimum without sacrificing the quality of the main agent.
+Claude Opus drives the conversation. Grunt work (web research, shell chores) runs in cheap Haiku subagents on the same Max-plan OAuth, keeping the main context small. Voice notes are transcribed via Whisper, and an optional `delegate` tool can ship pure text transforms to OpenAI.
 
 ## Prerequisites
 
 - **Node.js 22+**
 - **Claude Code** with a Max or Team subscription (main agent — no Anthropic API key needed)
-- **Telegram** account
-- **OpenAI API key** *(optional but recommended)* — unlocks voice transcription via Whisper and the `delegate` tool that offloads cheap work off the Max plan
+- **Telegram** account (Slack optional, see [Slack](#slack) below)
+- **OpenAI API key** *(optional)* — unlocks voice transcription via Whisper and the `delegate` tool
+- **Brave Search API key** *(optional, free tier)* — best-quality web search; without it the agent scrapes DuckDuckGo
 
 ## Quick Start
 
@@ -40,8 +41,8 @@ Use `/reset` to start a fresh conversation (personality persists).
 | `/reset`        | Clear conversation history                                   |
 | `/memory`       | Show what the bot remembers                                  |
 | `/cron`         | List scheduled tasks                                         |
-| `/model [name]` | View or switch Claude model for this session                 |
-| `/effort`       | Set effort level: low, medium, high, max                     |
+| `/model [name]` | View or switch Claude model for this chat (persisted)        |
+| `/effort`       | Set effort level for this chat: low, medium, high, max       |
 | `/think`        | Toggle extended thinking                                     |
 | `/approve`      | Toggle approval mode for shell/file actions                  |
 | `/webhook`      | List registered webhooks                                     |
@@ -106,7 +107,7 @@ Slack ────┘                       ↕          ↕
 - **Memory** — `workspace/memory.md` is a small index; substance lives in `workspace/memory/topics/*.md`; daily logs in `workspace/memory/`; everything searchable via the `memory_search` tool; a nightly job distills yesterday's log into topics
 - **Personality** — defined in `workspace/soul.md`, rewritten during onboarding
 - **Tools** — shell, web fetch/search, file I/O, memory search, cron, webhooks, delegate (OpenAI helper), plus native `researcher`/`worker` Haiku subagents
-- **Slack** — create a Slack app with Socket Mode enabled, add bot scopes `chat:write`, `files:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write`, subscribe to `message.im` + `app_mention` events, then set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`. The agent answers DMs and @mentions; no public URL needed
+- **Slack** — optional second home; see [Slack](#slack)
 
 ## Model Routing & Cost Control
 
@@ -126,6 +127,36 @@ To keep Claude Max plan usage low, messages are routed across three Claude tiers
 The main cost lever is **native subagents**: the agent can spawn a `researcher` (web search / fetch / memory mining) or a `worker` (shell + file chores) that run on Haiku in throwaway contexts, covered by the same Max-plan OAuth. Grunt work and large raw outputs stay out of the main conversation history that re-enters input on every turn.
 
 There is also a **`delegate` tool** that ships pure text-transform subtasks (reformatting, extraction, classification) to OpenAI (gpt-5-mini default) — useful as an escape hatch, but subagents are preferred since they have tools and stay on your plan.
+
+## Memory
+
+The agent's memory is designed so nothing durable gets lost, and nothing bloated gets loaded:
+
+```
+workspace/
+  memory.md            ← INDEX: one line per topic (always in the system prompt)
+  memory/topics/*.md   ← the actual facts, one file per topic
+  memory/YYYY-MM-DD.md ← daily logs (last 2 days in the system prompt)
+```
+
+- **Index in, substance out** — only the small index rides in every request. The agent opens topic files on demand.
+- **`memory_search`** — greps index, topics, and every daily log ever written. The agent is instructed to search before claiming it doesn't remember something.
+- **Nightly distillation** (`MEMORY_DISTILL_CRON`, default 03:30) — a Haiku pass folds yesterday's log into topic files and keeps the index tidy. If you're upgrading from an older version with a long memory.md, the first run migrates it automatically.
+- **Session rotation** (`SESSION_MAX_MESSAGES`, default 40) — long conversations get summarized to the daily log and restarted fresh, so context never silently degrades.
+
+`/memory` shows the current index. Everything is plain markdown — edit the files by hand any time; changes are picked up live.
+
+## Slack
+
+The same agent (same brain, same memory) can also live in your Slack workspace. No public URL needed — it uses Socket Mode, which dials out just like Telegram long polling.
+
+1. Create an app at [api.slack.com/apps](https://api.slack.com/apps) → **From scratch**.
+2. **Socket Mode** → enable, create an app-level token with `connections:write` → this is `SLACK_APP_TOKEN` (`xapp-…`).
+3. **OAuth & Permissions** → add bot scopes: `chat:write`, `files:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write` → install to workspace → this is `SLACK_BOT_TOKEN` (`xoxb-…`).
+4. **Event Subscriptions** → enable, subscribe to bot events `message.im` and `app_mention`.
+5. Add both tokens (and optionally `SLACK_ALLOWED_USERS`) to `.env`, restart.
+
+DM the bot or @mention it in a channel. Slack chats keep their own sessions and per-chat model/effort settings, but share the same soul, memory, and tools as Telegram.
 
 ## Running a Team (multi-agent collaboration)
 
