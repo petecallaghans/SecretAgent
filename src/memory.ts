@@ -25,6 +25,7 @@ export class Memory {
   async init(): Promise<void> {
     await mkdir(path.dirname(this.soulPath), { recursive: true });
     await mkdir(this.logDir, { recursive: true });
+    await mkdir(path.join(this.logDir, 'topics'), { recursive: true });
     await this.reload();
     this.watchWorkspace();
   }

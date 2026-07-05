@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import cron from 'node-cron';
 // Allow running inside a Claude Code session (e.g. during development)
 delete process.env.CLAUDECODE;
 delete process.env.CLAUDE_CODE_ENTRYPOINT;
@@ -110,6 +111,32 @@ async function main() {
 
   await cronScheduler.init();
   await webhookServer.init();
+
+  // Nightly memory distillation: fold yesterday's log into topic files + index.
+  // Runs as a fresh one-shot session on the light model; silent unless it fails.
+  if (config.memoryDistillCron) {
+    if (cron.validate(config.memoryDistillCron)) {
+      cron.schedule(config.memoryDistillCron, () => {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const prompt = [
+          `System: nightly memory distillation for ${yesterday}.`,
+          `1. Read that day's log with read_log("${yesterday}"). If empty, reply "DONE".`,
+          '2. Extract durable facts (preferences, people, projects, decisions, reference info).',
+          '3. Write each into the matching memory/topics/<slug>.md via write_file (create or update; merge, don\'t duplicate).',
+          '4. Update the memory.md index via save_memory: one line per topic file with a short hook, under ~30 lines total.',
+          '5. If memory.md still contains long-form content beyond index lines, migrate it into topic files now.',
+          'Reply "DONE" when finished.',
+        ].join('\n');
+        gateway.handleMessage('0', prompt, undefined, 'system', 'distill').then(
+          () => console.log('[distill] Nightly memory distillation completed'),
+          (err) => console.error('[distill] Nightly memory distillation failed:', err),
+        );
+      });
+      console.log(`  Memory distill: ${config.memoryDistillCron}`);
+    } else {
+      console.warn(`  Invalid MEMORY_DISTILL_CRON "${config.memoryDistillCron}" — distillation disabled`);
+    }
+  }
 
   // Graceful shutdown
   let shuttingDown = false;

@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { executeShell } from './shell.js';
 import { fetchUrl, webSearch } from './web.js';
 import { readFileContent, writeFileContent, listFiles, resolveSafe } from './files.js';
+import { searchMemory } from './memorySearch.js';
 import { runDelegate } from './delegate.js';
 import { deliverPeerMessage } from '../peer.js';
 import type { Config, PeerContext, PeerMessage } from '../types.js';
@@ -128,8 +129,17 @@ export function createToolServer(
       },
     ),
     tool(
+      'memory_search',
+      'Search long-term memory: the memory index, all topic files (memory/topics/), and every daily log. Use this BEFORE saying you don\'t know or don\'t remember something. Case-insensitive; accepts a regex or plain text.',
+      { pattern: z.string().describe('Regex or plain text to search for') },
+      async ({ pattern }) => {
+        const result = await searchMemory(pattern, config);
+        return { content: [{ type: 'text' as const, text: result }] };
+      },
+    ),
+    tool(
       'save_memory',
-      'Replace the entire long-term memory with new content. Use for permanent facts, preferences, and reference info — not daily notes (use append_log for those).',
+      'Replace the memory INDEX (memory.md). Keep it short — one line per topic with a hook, pointing at memory/topics/<slug>.md files. Put substance in topic files via write_file, not here.',
       { content: z.string().describe('Full updated content for memory.md') },
       async ({ content }) => {
         await memory.saveMemory(content);
@@ -138,8 +148,8 @@ export function createToolServer(
     ),
     tool(
       'append_memory',
-      'Append a new entry to long-term memory without replacing existing content. Use for permanent facts — not daily notes (use append_log for those).',
-      { content: z.string().describe('Content to append to memory.md') },
+      'Append a one-line entry to the memory INDEX (memory.md). For anything longer than a line, write a topic file (memory/topics/<slug>.md) via write_file and add a one-line pointer here. Not for daily notes (use append_log).',
+      { content: z.string().describe('One-line entry to append to memory.md') },
       async ({ content }) => {
         await memory.appendMemory(content);
         return { content: [{ type: 'text' as const, text: 'Memory entry appended.' }] };

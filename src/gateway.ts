@@ -11,7 +11,14 @@ import type { Roster } from './roster.js';
 
 import type { Effort, ThinkingMode } from './types.js';
 
-export type MessageSource = 'user' | 'cron' | 'webhook' | 'voice' | 'peer';
+export type MessageSource = 'user' | 'cron' | 'webhook' | 'voice' | 'peer' | 'system';
+
+/** One-shot maintenance turn asked of the agent when a session hits the rotation cap. */
+const ROTATION_PROMPT =
+  'System: this conversation is being rotated to keep context small. ' +
+  'Append ONE compact entry to today\'s daily log (append_log) capturing: durable facts learned, ' +
+  'decisions made, and any unfinished work with its current state. If a durable fact belongs in ' +
+  'long-term memory, update the relevant topic file too. Then reply "OK".';
 
 export const MODELS: Record<string, string> = {
   'haiku-4-5': 'claude-haiku-4-5',
@@ -131,9 +138,33 @@ export class Gateway {
     const { response, sessionId: newSessionId } = await this.agent.run(
       cleanText, sessionId, chatId, model, onStream, peerCtx,
     );
+
+    if (source === 'system') {
+      // Maintenance turns (rotation wrap-up, nightly distill) end their session:
+      // the next real message starts fresh with memory intact.
+      await this.sessions.clearSession(key);
+      return response;
+    }
+
     if (newSessionId) {
       await this.sessions.setSessionId(key, newSessionId);
     }
+
+    // Session rotation: past the cap, queue a wrap-up turn behind this one.
+    // It summarizes to the daily log, then (as source 'system') clears the session.
+    if (
+      source === 'user' &&
+      this.config.sessionMaxMessages > 0 &&
+      this.sessions.getCount(key) >= this.config.sessionMaxMessages
+    ) {
+      console.log(`[gateway] Session ${key} hit ${this.sessions.getCount(key)} messages — rotating`);
+      this.handleMessage(chatId, ROTATION_PROMPT, undefined, 'system', key).catch(err => {
+        console.error('[gateway] rotation wrap-up failed:', err);
+        // Still rotate — a stuck giant session is worse than a lost summary
+        void this.sessions.clearSession(key);
+      });
+    }
+
     return response;
   }
 
@@ -170,7 +201,7 @@ export class Gateway {
       if (/^\/deep(\s|$)/.test(message)) return this.config.modelDeep;
       if (/^\/light(\s|$)/.test(message)) return this.config.modelLight;
     }
-    if (source === 'cron' || source === 'webhook') {
+    if (source === 'cron' || source === 'webhook' || source === 'system') {
       return this.config.modelLight;
     }
     return this.chatModels.get(chatId) || this.config.modelDefault;

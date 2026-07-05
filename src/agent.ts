@@ -153,7 +153,16 @@ export class Agent {
     if (tools) parts.push(`\n## Tools & Instructions\nIMPORTANT: Follow these instructions carefully — they define your available tools and behavioral rules.\n${tools}`);
 
     const mem = this.memory.getMemory();
-    if (mem) parts.push(`\n## Long-term Memory\n${mem}`);
+    if (mem) parts.push(`\n## Long-term Memory (index)\n${mem}`);
+
+    parts.push([
+      '\n## Memory protocol',
+      '- memory.md above is an INDEX: one line per topic pointing at memory/topics/<slug>.md.',
+      '- Details live in topic files — read them with read_file when a topic is relevant.',
+      '- Before saying you don\'t know or don\'t remember something, use memory_search.',
+      '- New durable facts: write/update a topic file, then keep the index line current.',
+      '- Conversation events and observations go to append_log, not memory.',
+    ].join('\n'));
 
     const recentLogs = await this.memory.getRecentLogs();
     if (recentLogs) parts.push(`\n## Recent Activity\n${recentLogs}`);
