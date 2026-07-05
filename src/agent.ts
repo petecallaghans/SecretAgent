@@ -25,6 +25,48 @@ const EFFORT_MAX_TOKENS: Record<string, number> = {
   max: 16384,
 };
 
+/**
+ * Native SDK subagents (invoked via the Task/Agent tool). Run on Haiku with a
+ * narrow tool set: grunt work happens in cheap throwaway contexts while the
+ * main session stays small. Auth rides the same OAuth as the main agent.
+ */
+const SUBAGENTS = {
+  researcher: {
+    description:
+      'Research assistant for web lookups. Use for: fetching and distilling web pages, ' +
+      'web searches, checking facts online, mining long-term memory/logs. Give it a specific ' +
+      'question; it returns a dense summary so the main conversation stays small.',
+    prompt:
+      'You are a research subagent. Use web_search, fetch_url, and memory_search to answer ' +
+      'the question you were given. Be thorough but return ONLY a dense, factual summary ' +
+      'with sources — no preamble, no filler. If you cannot find an answer, say exactly what you tried.',
+    tools: [
+      `mcp__${SERVER_NAME}__web_search`,
+      `mcp__${SERVER_NAME}__fetch_url`,
+      `mcp__${SERVER_NAME}__memory_search`,
+      'Read',
+    ],
+    model: 'haiku' as const,
+  },
+  worker: {
+    description:
+      'Worker for mechanical multi-step chores: running shell commands, reading/writing ' +
+      'workspace files, batch file operations. Give it a concrete task; it reports the outcome.',
+    prompt:
+      'You are a worker subagent. Execute the task you were given using shell and file tools. ' +
+      'Work step by step, verify results, and report ONLY the outcome: what was done, what ' +
+      'succeeded, what failed (with the exact error). No preamble.',
+    tools: [
+      `mcp__${SERVER_NAME}__shell`,
+      `mcp__${SERVER_NAME}__read_file`,
+      `mcp__${SERVER_NAME}__write_file`,
+      `mcp__${SERVER_NAME}__list_files`,
+      'Read',
+    ],
+    model: 'haiku' as const,
+  },
+};
+
 interface ExternalMcpServer {
   type: string;
   command: string;
@@ -156,6 +198,14 @@ export class Agent {
     if (mem) parts.push(`\n## Long-term Memory (index)\n${mem}`);
 
     parts.push([
+      '\n## Subagents',
+      'You have two cheap subagents (launched via the Task tool): `researcher` (web search, ' +
+        'URL fetching, memory mining) and `worker` (shell + file chores). Prefer them for ' +
+        'research and mechanical multi-step work — they keep this conversation small and cheap. ' +
+        'Handle reasoning, judgment, and user-facing answers yourself.',
+    ].join('\n'));
+
+    parts.push([
       '\n## Memory protocol',
       '- memory.md above is an INDEX: one line per topic pointing at memory/topics/<slug>.md.',
       '- Details live in topic files — read them with read_file when a topic is relevant.',
@@ -210,7 +260,8 @@ export class Agent {
     let newSessionId = sessionId || '';
 
     const externalServers = await this.loadExternalMcpServers();
-    const allowedTools: string[] = [`mcp__${SERVER_NAME}__*`, 'Read'];
+    // 'Task'/'Agent' = subagent launcher (name varies across SDK versions)
+    const allowedTools: string[] = [`mcp__${SERVER_NAME}__*`, 'Read', 'Task', 'Agent'];
     const mcpServers: Record<string, unknown> = { [SERVER_NAME]: this.toolServer };
 
     for (const [name, serverConfig] of Object.entries(externalServers)) {
@@ -239,6 +290,7 @@ export class Agent {
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       mcpServers,
+      agents: SUBAGENTS,
       includePartialMessages: !!onStream,
       effort,
       thinking,

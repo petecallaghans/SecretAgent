@@ -205,15 +205,12 @@ export function createToolServer(
     tool(
       'delegate',
       [
-        'Hand off a subtask to a cheap helper model (OpenAI) to minimize Claude Max plan usage.',
-        'USE THIS for any work that does not require top-tier reasoning: lookups, parsing, summarizing,',
-        'reformatting, classifying, extracting fields, drafting boilerplate, translating, generating regex,',
-        'parsing JSON, writing simple code snippets, web-content distillation, calendar/email parsing.',
-        'You synthesize the final user-facing answer; the helper only produces raw intermediate output.',
-        'The helper has NO conversation history — include all needed context in the task.',
-        'Tiers: nano = trivial (one-word classify, tiny extracts), mini = default workhorse,',
-        'smart = harder reasoning (multi-step summary, longer rewrites). Prefer mini unless reason to differ.',
-        'Set json=true when you need a parseable JSON object back.',
+        'Hand off a pure text-transform subtask to an external helper model (OpenAI).',
+        'Prefer the native researcher/worker subagents (Task tool) — they have tools and stay on your plan.',
+        'Use delegate only for isolated text work when subagents are overkill or unavailable:',
+        'reformatting, classifying, extracting fields, translating, generating regex, parsing JSON.',
+        'The helper has NO conversation history and NO tools — include all needed context in the task.',
+        'Tiers: nano = trivial, mini = default, smart = harder rewrites. Set json=true for a parseable JSON object.',
       ].join(' '),
       {
         task: z.string().describe('Self-contained instruction. Include all context the helper needs.'),
