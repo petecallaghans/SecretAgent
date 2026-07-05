@@ -153,10 +153,12 @@ The same agent (same brain, same memory) can also live in your Slack workspace. 
 1. Create an app at [api.slack.com/apps](https://api.slack.com/apps) → **From scratch**.
 2. **Socket Mode** → enable, create an app-level token with `connections:write` → this is `SLACK_APP_TOKEN` (`xapp-…`).
 3. **OAuth & Permissions** → add bot scopes: `chat:write`, `files:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write` → install to workspace → this is `SLACK_BOT_TOKEN` (`xoxb-…`).
-4. **Event Subscriptions** → enable, subscribe to bot events `message.im` and `app_mention`.
-5. Add both tokens (and optionally `SLACK_ALLOWED_USERS`) to `.env`, restart.
+4. **Event Subscriptions** → enable, subscribe to bot events `message.im` and `app_mention`. (Slack may ask you to reinstall the app after scope/event changes — do it.)
+5. Add both tokens (and optionally `SLACK_ALLOWED_USERS`) to `.env`, restart. The startup log shows `Slack connected as <botname> (socket mode)`.
 
 DM the bot or @mention it in a channel. Slack chats keep their own sessions and per-chat model/effort settings, but share the same soul, memory, and tools as Telegram.
+
+> **Security:** in a shared workspace, an empty `SLACK_ALLOWED_USERS` means *anyone* in the workspace can command an agent that has shell access. Set it to your Slack member ID (profile → three-dot menu → **Copy member ID**).
 
 ## Running a Team (multi-agent collaboration)
 
