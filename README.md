@@ -1,15 +1,16 @@
 # SecretAgent
 
-Your personal AI assistant on Telegram, powered by Claude (with OpenAI as a cheap helper). It personalizes itself on first message — choosing a name, personality, and learning about you through conversation.
+Your personal AI assistant on Telegram and Slack, powered by Claude. It personalizes itself on first message — choosing a name, personality, and learning about you through conversation — and it actually remembers: a topic-file memory system with search and nightly distillation means facts survive long past the conversation they came from.
 
-Claude Opus drives the conversation. For routine subtasks (parsing, summarizing, extracting, formatting, transcribing voice) the agent hands off to OpenAI models via a built-in `delegate` tool and Whisper. This keeps Claude Max plan token usage to a minimum without sacrificing the quality of the main agent.
+Claude Opus drives the conversation. Grunt work (web research, shell chores) runs in cheap Haiku subagents on the same Max-plan OAuth, keeping the main context small. Voice notes are transcribed via Whisper, and an optional `delegate` tool can ship pure text transforms to OpenAI.
 
 ## Prerequisites
 
 - **Node.js 22+**
 - **Claude Code** with a Max or Team subscription (main agent — no Anthropic API key needed)
-- **Telegram** account
-- **OpenAI API key** *(optional but recommended)* — unlocks voice transcription via Whisper and the `delegate` tool that offloads cheap work off the Max plan
+- **Telegram** account (Slack optional, see [Slack](#slack) below)
+- **OpenAI API key** *(optional)* — unlocks voice transcription via Whisper and the `delegate` tool
+- **Brave Search API key** *(optional, free tier)* — best-quality web search; without it the agent scrapes DuckDuckGo
 
 ## Quick Start
 
@@ -40,8 +41,8 @@ Use `/reset` to start a fresh conversation (personality persists).
 | `/reset`        | Clear conversation history                                   |
 | `/memory`       | Show what the bot remembers                                  |
 | `/cron`         | List scheduled tasks                                         |
-| `/model [name]` | View or switch Claude model for this session                 |
-| `/effort`       | Set effort level: low, medium, high, max                     |
+| `/model [name]` | View or switch Claude model for this chat (persisted)        |
+| `/effort`       | Set effort level for this chat: low, medium, high, max       |
 | `/think`        | Toggle extended thinking                                     |
 | `/approve`      | Toggle approval mode for shell/file actions                  |
 | `/webhook`      | List registered webhooks                                     |
@@ -58,6 +59,9 @@ All config lives in `.env` (created by setup):
 |-------------------------|----------------------|-------------------------------------------------------------------|
 | `TELEGRAM_BOT_TOKEN`    | *(required)*         | From @BotFather                                                   |
 | `ALLOWED_USERS`         | *(empty = all)*      | Comma-separated Telegram user IDs                                 |
+| `SLACK_BOT_TOKEN`       | *(optional)*         | Slack bot token (`xoxb-…`); with app token enables Slack          |
+| `SLACK_APP_TOKEN`       | *(optional)*         | Slack app-level token (`xapp-…`, `connections:write`)             |
+| `SLACK_ALLOWED_USERS`   | *(empty = all)*      | Comma-separated Slack user IDs                                    |
 | `MODEL_LIGHT`           | `claude-haiku-4-5`   | Cheap model for cron, webhooks, voice relay                       |
 | `MODEL_DEFAULT`         | `claude-opus-4-6`    | Main user-facing model (also fallback for legacy `MODEL` var)     |
 | `MODEL_DEEP`            | `claude-opus-4-6`    | Used by `/deep` prefix                                            |
@@ -66,8 +70,11 @@ All config lives in `.env` (created by setup):
 | `OPENAI_DELEGATE_MINI`  | `gpt-5-mini`         | Default helper for delegated work                                 |
 | `OPENAI_DELEGATE_SMART` | `gpt-5.4-mini`       | Helper for harder subtasks                                        |
 | `MAX_TOKENS`            | `8192`               | Max response tokens                                               |
-| `EFFORT`                | `low`                | low \| medium \| high \| max — caps turns and tokens per query    |
+| `EFFORT`                | `medium`             | low \| medium \| high \| max — caps turns and tokens per query    |
 | `THINKING`              | `disabled`           | adaptive \| disabled — extended thinking mode                     |
+| `BRAVE_API_KEY`         | *(optional)*         | Real web search via Brave; falls back to DuckDuckGo scrape        |
+| `MEMORY_DISTILL_CRON`   | `30 3 * * *`         | Nightly memory distillation schedule (empty = off)                |
+| `SESSION_MAX_MESSAGES`  | `40`                 | Exchanges before a session is summarized + rotated (0 = off)      |
 | `WORKSPACE_DIR`         | `./workspace`        | Agent's working directory                                         |
 | `DATA_DIR`              | `./data`             | Session, cron, and webhook data                                   |
 | `SHELL_ALLOWLIST`       | *(empty = all)*      | Comma-separated allowed shell commands                            |
@@ -88,17 +95,19 @@ npm start        # run compiled JS (production)
 ## How It Works
 
 ```
-Telegram → TelegramAdapter → Gateway → Agent → Claude (via Agent SDK)
-                                ↕            ↕
-                          SessionManager   MCP Tools
-                          (sessions.json)  (shell, web, files, memory, cron, delegate)
+Telegram ─┐
+          ├→ ChannelRegistry → Gateway → Agent → Claude (via Agent SDK)
+Slack ────┘                       ↕          ↕
+                            SessionManager  MCP Tools + Haiku subagents
+                            (sessions.json) (shell, web, files, memory, cron, delegate)
 ```
 
 - **No Anthropic API key needed** — uses Claude Code's OAuth flow (requires Max or Team subscription)
-- **Session persistence** — conversations resume across bot restarts
-- **Memory** — long-term memory in `workspace/memory.md`, daily logs in `workspace/logs/`
+- **Session persistence** — conversations resume across bot restarts; long sessions auto-rotate (summary → daily log → fresh context)
+- **Memory** — `workspace/memory.md` is a small index; substance lives in `workspace/memory/topics/*.md`; daily logs in `workspace/memory/`; everything searchable via the `memory_search` tool; a nightly job distills yesterday's log into topics
 - **Personality** — defined in `workspace/soul.md`, rewritten during onboarding
-- **Tools** — shell, web fetch/search, file I/O, cron, webhooks, delegate (OpenAI helper)
+- **Tools** — shell, web fetch/search, file I/O, memory search, cron, webhooks, delegate (OpenAI helper), plus native `researcher`/`worker` Haiku subagents
+- **Slack** — optional second home; see [Slack](#slack)
 
 ## Model Routing & Cost Control
 
@@ -107,14 +116,49 @@ To keep Claude Max plan usage low, messages are routed across three Claude tiers
 | Source                          | Model used                              |
 |---------------------------------|-----------------------------------------|
 | User chat (default)             | `MODEL_DEFAULT` (Opus 4.6)              |
+| Voice note (post-Whisper)       | Chat default — voice is real user input |
 | Cron job firing                 | `MODEL_LIGHT` (Haiku)                   |
 | Webhook firing                  | `MODEL_LIGHT` (Haiku)                   |
-| Voice note (post-Whisper)       | `MODEL_LIGHT` (Haiku)                   |
-| `/deep <msg>` prefix            | `MODEL_DEEP` (Opus)                     |
+| Maintenance (rotation, distill) | `MODEL_LIGHT` (Haiku)                   |
+| `/deep <msg>` prefix            | `MODEL_DEEP` (Opus) + effort `high`     |
 | `/light <msg>` prefix           | `MODEL_LIGHT` (Haiku)                   |
-| `/model <name>` (session)       | Whatever the user set                   |
+| `/model <name>` (per chat)      | Whatever the user set (persisted)       |
 
-The main agent also has a **`delegate` tool** that calls OpenAI (gpt-5-mini default) for cheap subtasks — parsing tool output, summarizing fetched pages, extracting fields, classifying intent, formatting. Opus synthesizes the final answer; the helper produces raw intermediate output. This keeps large raw outputs out of the conversation history that re-enters input on every following turn, cutting Max-plan token usage significantly on tool-heavy workloads.
+The main cost lever is **native subagents**: the agent can spawn a `researcher` (web search / fetch / memory mining) or a `worker` (shell + file chores) that run on Haiku in throwaway contexts, covered by the same Max-plan OAuth. Grunt work and large raw outputs stay out of the main conversation history that re-enters input on every turn.
+
+There is also a **`delegate` tool** that ships pure text-transform subtasks (reformatting, extraction, classification) to OpenAI (gpt-5-mini default) — useful as an escape hatch, but subagents are preferred since they have tools and stay on your plan.
+
+## Memory
+
+The agent's memory is designed so nothing durable gets lost, and nothing bloated gets loaded:
+
+```
+workspace/
+  memory.md            ← INDEX: one line per topic (always in the system prompt)
+  memory/topics/*.md   ← the actual facts, one file per topic
+  memory/YYYY-MM-DD.md ← daily logs (last 2 days in the system prompt)
+```
+
+- **Index in, substance out** — only the small index rides in every request. The agent opens topic files on demand.
+- **`memory_search`** — greps index, topics, and every daily log ever written. The agent is instructed to search before claiming it doesn't remember something.
+- **Nightly distillation** (`MEMORY_DISTILL_CRON`, default 03:30) — a Haiku pass folds yesterday's log into topic files and keeps the index tidy. If you're upgrading from an older version with a long memory.md, the first run migrates it automatically.
+- **Session rotation** (`SESSION_MAX_MESSAGES`, default 40) — long conversations get summarized to the daily log and restarted fresh, so context never silently degrades.
+
+`/memory` shows the current index. Everything is plain markdown — edit the files by hand any time; changes are picked up live.
+
+## Slack
+
+The same agent (same brain, same memory) can also live in your Slack workspace. No public URL needed — it uses Socket Mode, which dials out just like Telegram long polling.
+
+1. Create an app at [api.slack.com/apps](https://api.slack.com/apps) → **From scratch**.
+2. **Socket Mode** → enable, create an app-level token with `connections:write` → this is `SLACK_APP_TOKEN` (`xapp-…`).
+3. **OAuth & Permissions** → add bot scopes: `chat:write`, `files:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write` → install to workspace → this is `SLACK_BOT_TOKEN` (`xoxb-…`).
+4. **Event Subscriptions** → enable, subscribe to bot events `message.im` and `app_mention`. (Slack may ask you to reinstall the app after scope/event changes — do it.)
+5. Add both tokens (and optionally `SLACK_ALLOWED_USERS`) to `.env`, restart. The startup log shows `Slack connected as <botname> (socket mode)`.
+
+DM the bot or @mention it in a channel. Slack chats keep their own sessions and per-chat model/effort settings, but share the same soul, memory, and tools as Telegram.
+
+> **Security:** in a shared workspace, an empty `SLACK_ALLOWED_USERS` means *anyone* in the workspace can command an agent that has shell access. Set it to your Slack member ID (profile → three-dot menu → **Copy member ID**).
 
 ## Running a Team (multi-agent collaboration)
 
@@ -127,44 +171,153 @@ agent↔agent comms travel over HTTP (`POST /peer`, reusing the webhook server),
 Telegram group is for human visibility and steering. Handoffs are mirrored into the group so
 you can follow along.
 
-### Setup
+```
+        ┌──────── Telegram group (you watch + steer) ────────┐
+        │   Alice posts ▲    Bob posts ▲    You ▲             │
+        └───────▲─────────────────▲──────────────▲───────────┘
+                │                  │              │
+        ┌───────┴──────┐  /peer ┌──┴───────────┐ │ @mentions
+        │  Instance A  │ (HTTP) │  Instance B   │◀┘ (group-gated)
+        │  self: alice │◀──────▶│  self: bob    │
+        └──────────────┘        └───────────────┘
+```
 
-1. **Per instance:** its own bot token, `WEBHOOK_PORT`, `DATA_DIR`, and `WORKSPACE_DIR`.
-2. **Shared:** the same `PEER_SECRET` on every instance, the same Telegram `groupChatId`, and a
-   roster. Copy `workspace/roster.example.json` to `workspace/roster.json` and set `self` to
-   this instance's id (everything else can be identical across instances).
-3. **Invite** every bot to the group and grant it message access.
+### Step 1 — Create the bots
 
-```jsonc
-// workspace/roster.json — plain JSON only (no comments); peerUrls contain "//"
+In Telegram, talk to [@BotFather](https://t.me/BotFather) and run `/newbot` once per agent
+(e.g. `Alice`, `Bob`). Save each bot token. Then, so bots can read normal group messages,
+send BotFather `/setprivacy` → pick each bot → **Disable**. (With privacy enabled a bot only
+sees messages that @mention it or reply to it — mention-gating still works, but plain-name
+addressing like "Alice, do X" won't reach the bot.)
+
+### Step 2 — Create the group and get its ID
+
+1. Create a Telegram group and add **all** the agent bots plus yourself.
+2. Get the group's chat id: add [@RawDataBot](https://t.me/RawDataBot) to the group briefly
+   and read `message.chat.id` (a negative number like `-1001234567890`), then remove it.
+   Alternatively, message the group and open
+   `https://api.telegram.org/bot<ANY_BOT_TOKEN>/getUpdates` and read `chat.id`.
+
+### Step 3 — Lay out one instance per agent
+
+Each agent is a separate process with its own token, port, data dir, and workspace. Two ways:
+
+**Same machine (simplest for testing):** one clone, different env vars per process.
+
+```bash
+# Alice — terminal 1
+TELEGRAM_BOT_TOKEN=<alice-token> PEER_SECRET=shared-secret \
+WEBHOOK_PORT=3000 DATA_DIR=./dataA WORKSPACE_DIR=./wsA npm run dev
+
+# Bob — terminal 2
+TELEGRAM_BOT_TOKEN=<bob-token> PEER_SECRET=shared-secret \
+WEBHOOK_PORT=3001 DATA_DIR=./dataB WORKSPACE_DIR=./wsB npm run dev
+```
+
+**Separate machines/VMs:** one deploy each, normal `.env` per host. Set each `peerUrl` to the
+reachable address of that host (LAN/VPN/localhost — see Security).
+
+### Step 4 — Write the shared roster
+
+Copy `workspace/roster.example.json` to each instance's `WORKSPACE_DIR/roster.json`. The file
+is **identical across instances except `self`**, which is that instance's own id.
+
+```json
 {
-  "self": "alice",                          // differs per instance
-  "groupChatId": "-1001234567890",          // shared Telegram group
-  "sharedSecret": "env:PEER_SECRET",         // bearer for /peer; read from env
+  "self": "alice",
+  "groupChatId": "-1001234567890",
+  "sharedSecret": "env:PEER_SECRET",
   "peers": [
-    { "id": "alice", "name": "Alice", "role": "researcher", "peerUrl": "http://host-a:3000/peer" },
-    { "id": "bob",   "name": "Bob",   "role": "writer",     "peerUrl": "http://host-b:3001/peer" }
+    { "id": "alice", "name": "Alice", "role": "researcher", "peerUrl": "http://127.0.0.1:3000/peer" },
+    { "id": "bob",   "name": "Bob",   "role": "writer",     "peerUrl": "http://127.0.0.1:3001/peer" }
   ]
 }
 ```
 
+- Plain JSON only — **no comments**; `peerUrl`s contain `//` and a comment-stripper would corrupt them.
+- `sharedSecret: "env:PEER_SECRET"` reads the secret from the env var (keeps it out of the file).
+- `peerUrl` is `http://<host>:<that instance's WEBHOOK_PORT>/peer`.
+- Bob's copy is the same file with `"self": "bob"`.
+
+### Step 5 — Give each agent a role in its soul
+
+`soul.md` holds personality and behavior; the framework only supplies the *mechanism* to message
+peers. Tell each agent how to collaborate. Example snippets:
+
+```markdown
+<!-- wsA/soul.md (Alice, the researcher) -->
+You are Alice, the team's researcher. When asked to investigate something, gather the facts
+with your tools, then hand the findings to Bob with `message_peer({ to: "bob", message, payload })`.
+Don't write the final copy yourself — that's Bob's job.
+```
+
+```markdown
+<!-- wsB/soul.md (Bob, the writer) -->
+You are Bob, the team's writer. When Alice sends you research, draft the piece, post it to the
+group, and message Alice back if you need anything. Replies from teammates arrive as new
+messages — don't wait around for them.
+```
+
+### Step 6 — Run and try it
+
+Start all instances. In the group, address an agent by @username, name, or id:
+
+```
+@AliceBot research the top 3 LLM eval frameworks and have Bob write a short summary.
+```
+
+You should see: Alice works, a mirrored `→ Bob: …` handoff line, Bob's draft posted to the
+group, and any reply back to Alice — all visible to you, who can interrupt at any point.
+
 ### How it behaves
 
 - **Opt-in.** No roster (or no peers) → classic single-agent behavior, unchanged.
-- **Mention-gating.** In a group, an agent acts only when addressed — its @username, its
-  name, or its id, or a reply to one of its own messages. (Private chats: unchanged.) Use
+- **Mention-gating.** In a group, an agent acts only when addressed — its @username, its name,
+  or its id, or a reply to one of its own messages. (Private chats: unchanged.) Use
   `/command@BotName` to scope slash commands to one bot in a group.
 - **`message_peer` tool.** Agents hand off with `message_peer({ to, message, payload? })`.
   Replies arrive later as a new inbound message — agents don't block waiting.
+- **Sessions.** Each peer conversation runs in its own chain-scoped session, so unrelated
+  hand-offs don't bleed into one another.
 - **Loop safety.** A `hops` counter caps runaway chains at `MAX_HOPS` (default 8); on the cap,
   the chain halts and asks for a human.
 
+### Verify the peer channel (without a group)
+
+Confirm the wire works against a single running instance:
+
+```bash
+# Pretend Bob messaged Alice (Alice running on :3000 with PEER_SECRET=shared-secret)
+curl -i -XPOST http://127.0.0.1:3000/peer \
+  -H 'Authorization: Bearer shared-secret' -H 'Content-Type: application/json' \
+  -d '{"from":"bob","to":"alice","message":"can you research X and send notes?"}'
+# → HTTP 202 {"accepted":true,"msgId":"..."}; wrong/absent token → 401
+```
+
 ### Security
 
-The peer channel is bearer-authenticated with `PEER_SECRET`. Keep `peerUrl`s on a private
-network (LAN/VPN/localhost) — don't expose `/peer` to the open internet. Content that an agent
-fetched from the outside (emails, web pages) and forwards in a peer message is still untrusted
-data; write your souls to treat it as such.
+- The peer channel is bearer-authenticated with `PEER_SECRET` (constant-time compared). Use a
+  long random value and the **same** one on every instance.
+- Keep `peerUrl`s on a private network (LAN/VPN/localhost). **Don't expose `/peer` to the open
+  internet.**
+- Content an agent fetched from outside (emails, web pages) and forwards in a peer message is
+  still untrusted data. The framework never auto-executes payloads — agents decide — so write
+  your souls to treat forwarded content with suspicion.
+
+### Troubleshooting
+
+- **Both bots reply to everything** → roster not loaded (mention-gating only activates with a
+  roster). Check the startup log for `Team: I am …`; confirm `roster.json` is in the right
+  `WORKSPACE_DIR` and is valid JSON.
+- **Agent ignores "Alice, do X" but answers "@AliceBot do X"** → bot privacy mode is on; disable
+  it via BotFather `/setprivacy` (Step 1).
+- **`message_peer` says "unknown teammate"** → the `to` value must match a peer `id` or `name`
+  in the roster.
+- **Peer delivery fails / 401** → `PEER_SECRET` differs between instances, or `peerUrl`/port is
+  wrong or unreachable. The sender mirrors the failure to the group.
+- **"Hop limit reached"** → a chain hit `MAX_HOPS`; reply in the group to continue, or raise
+  `MAX_HOPS`.
+- **Startup error `Roster 'self' id "x" not found`** → `self` doesn't match any peer `id`.
 
 ## Running 24/7
 

@@ -1,3 +1,5 @@
+import type { Config } from '../types.js';
+
 const MAX_CONTENT = 15_000;
 
 export async function fetchUrl(url: string): Promise<string> {
@@ -39,7 +41,93 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-export async function webSearch(query: string): Promise<string> {
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+}
+
+/**
+ * Web search with three strategies, best available first:
+ *   1. Brave Search API (real results, needs BRAVE_API_KEY)
+ *   2. DuckDuckGo HTML endpoint scrape (real results, no key)
+ *   3. DuckDuckGo Instant Answer API (abstracts only — last resort)
+ */
+export async function webSearch(query: string, config?: Config): Promise<string> {
+  if (config?.braveApiKey) {
+    const brave = await braveSearch(query, config.braveApiKey);
+    if (brave) return brave;
+  }
+  const ddg = await ddgHtmlSearch(query);
+  if (ddg) return ddg;
+  return ddgInstantAnswer(query);
+}
+
+async function braveSearch(query: string, apiKey: string): Promise<string | null> {
+  try {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`;
+    const response = await fetch(url, {
+      headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as { web?: { results?: Array<{ title?: string; url?: string; description?: string }> } };
+    const results = data.web?.results || [];
+    if (results.length === 0) return null;
+    return results.slice(0, 5).map(r =>
+      `${r.title || '(untitled)'}\n${r.url || ''}\n${htmlToText(r.description || '')}`
+    ).join('\n\n');
+  } catch {
+    return null;
+  }
+}
+
+async function ddgHtmlSearch(query: string): Promise<string | null> {
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SecretAgent/1.0)' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+
+    const results: string[] = [];
+    // Each result: <a class="result__a" href="...">Title</a> ... <a class="result__snippet" ...>Snippet</a>
+    const linkRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippetRe = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
+    const links: Array<{ url: string; title: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = linkRe.exec(html)) !== null && links.length < 5) {
+      links.push({ url: decodeDdgUrl(m[1]), title: decodeEntities(m[2].replace(/<[^>]+>/g, '')).trim() });
+    }
+    const snippets: string[] = [];
+    while ((m = snippetRe.exec(html)) !== null && snippets.length < 5) {
+      snippets.push(decodeEntities(m[1].replace(/<[^>]+>/g, '')).trim());
+    }
+    for (let i = 0; i < links.length; i++) {
+      results.push(`${links[i].title}\n${links[i].url}\n${snippets[i] || ''}`.trim());
+    }
+    return results.length > 0 ? results.join('\n\n') : null;
+  } catch {
+    return null;
+  }
+}
+
+/** DDG HTML links are often redirect URLs like //duckduckgo.com/l/?uddg=<encoded>. */
+function decodeDdgUrl(href: string): string {
+  const match = href.match(/[?&]uddg=([^&]+)/);
+  if (match) {
+    try { return decodeURIComponent(match[1]); } catch { /* fall through */ }
+  }
+  return href.startsWith('//') ? `https:${href}` : href;
+}
+
+async function ddgInstantAnswer(query: string): Promise<string> {
   try {
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`;
     const response = await fetch(url, {

@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { executeShell } from './shell.js';
 import { fetchUrl, webSearch } from './web.js';
 import { readFileContent, writeFileContent, listFiles, resolveSafe } from './files.js';
+import { searchMemory } from './memorySearch.js';
 import { runDelegate } from './delegate.js';
 import { deliverPeerMessage } from '../peer.js';
 import type { Config, PeerContext, PeerMessage } from '../types.js';
@@ -60,10 +61,10 @@ export function createToolServer(
     ),
     tool(
       'web_search',
-      'Search the web via DuckDuckGo and return results.',
+      'Search the web and return results (title, URL, snippet). Uses Brave Search when a key is configured, otherwise DuckDuckGo.',
       { query: z.string().describe('The search query') },
       async ({ query }) => {
-        const result = await webSearch(query);
+        const result = await webSearch(query, config);
         return { content: [{ type: 'text' as const, text: result }] };
       },
     ),
@@ -107,7 +108,7 @@ export function createToolServer(
     ),
     tool(
       'send_file',
-      'Send a file from the workspace to the user via Telegram.',
+      'Send a file from the workspace to the user in the current chat.',
       {
         path: z.string().describe('File path relative to workspace'),
         caption: z.string().optional().describe('Optional caption for the file'),
@@ -128,8 +129,17 @@ export function createToolServer(
       },
     ),
     tool(
+      'memory_search',
+      'Search long-term memory: the memory index, all topic files (memory/topics/), and every daily log. Use this BEFORE saying you don\'t know or don\'t remember something. Case-insensitive; accepts a regex or plain text.',
+      { pattern: z.string().describe('Regex or plain text to search for') },
+      async ({ pattern }) => {
+        const result = await searchMemory(pattern, config);
+        return { content: [{ type: 'text' as const, text: result }] };
+      },
+    ),
+    tool(
       'save_memory',
-      'Replace the entire long-term memory with new content. Use for permanent facts, preferences, and reference info — not daily notes (use append_log for those).',
+      'Replace the memory INDEX (memory.md). Keep it short — one line per topic with a hook, pointing at memory/topics/<slug>.md files. Put substance in topic files via write_file, not here.',
       { content: z.string().describe('Full updated content for memory.md') },
       async ({ content }) => {
         await memory.saveMemory(content);
@@ -138,8 +148,8 @@ export function createToolServer(
     ),
     tool(
       'append_memory',
-      'Append a new entry to long-term memory without replacing existing content. Use for permanent facts — not daily notes (use append_log for those).',
-      { content: z.string().describe('Content to append to memory.md') },
+      'Append a one-line entry to the memory INDEX (memory.md). For anything longer than a line, write a topic file (memory/topics/<slug>.md) via write_file and add a one-line pointer here. Not for daily notes (use append_log).',
+      { content: z.string().describe('One-line entry to append to memory.md') },
       async ({ content }) => {
         await memory.appendMemory(content);
         return { content: [{ type: 'text' as const, text: 'Memory entry appended.' }] };
@@ -187,7 +197,7 @@ export function createToolServer(
           id,
           schedule,
           prompt,
-          chatId: Number(callbacks.getChatId()) || 0,
+          chatId: callbacks.getChatId(),
         });
         return { content: [{ type: 'text' as const, text: result }] };
       },
@@ -195,15 +205,12 @@ export function createToolServer(
     tool(
       'delegate',
       [
-        'Hand off a subtask to a cheap helper model (OpenAI) to minimize Claude Max plan usage.',
-        'USE THIS for any work that does not require top-tier reasoning: lookups, parsing, summarizing,',
-        'reformatting, classifying, extracting fields, drafting boilerplate, translating, generating regex,',
-        'parsing JSON, writing simple code snippets, web-content distillation, calendar/email parsing.',
-        'You synthesize the final user-facing answer; the helper only produces raw intermediate output.',
-        'The helper has NO conversation history — include all needed context in the task.',
-        'Tiers: nano = trivial (one-word classify, tiny extracts), mini = default workhorse,',
-        'smart = harder reasoning (multi-step summary, longer rewrites). Prefer mini unless reason to differ.',
-        'Set json=true when you need a parseable JSON object back.',
+        'Hand off a pure text-transform subtask to an external helper model (OpenAI).',
+        'Prefer the native researcher/worker subagents (Task tool) — they have tools and stay on your plan.',
+        'Use delegate only for isolated text work when subagents are overkill or unavailable:',
+        'reformatting, classifying, extracting fields, translating, generating regex, parsing JSON.',
+        'The helper has NO conversation history and NO tools — include all needed context in the task.',
+        'Tiers: nano = trivial, mini = default, smart = harder rewrites. Set json=true for a parseable JSON object.',
       ].join(' '),
       {
         task: z.string().describe('Self-contained instruction. Include all context the helper needs.'),
@@ -238,7 +245,7 @@ export function createToolServer(
           path,
           prompt,
           secret,
-          chatId: Number(callbacks.getChatId()) || 0,
+          chatId: callbacks.getChatId(),
         });
         return { content: [{ type: 'text' as const, text: result }] };
       },

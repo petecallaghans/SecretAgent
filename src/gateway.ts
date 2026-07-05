@@ -8,23 +8,35 @@ import type { Memory } from './memory.js';
 import type { CronScheduler } from './cron.js';
 import type { WebhookServer } from './webhook.js';
 import type { Roster } from './roster.js';
+import type { PrefsStore } from './prefs.js';
 
 import type { Effort, ThinkingMode } from './types.js';
 
-export type MessageSource = 'user' | 'cron' | 'webhook' | 'voice' | 'peer';
+export type MessageSource = 'user' | 'cron' | 'webhook' | 'voice' | 'peer' | 'system';
+
+/** One-shot maintenance turn asked of the agent when a session hits the rotation cap. */
+const ROTATION_PROMPT =
+  'System: this conversation is being rotated to keep context small. ' +
+  'Append ONE compact entry to today\'s daily log (append_log) capturing: durable facts learned, ' +
+  'decisions made, and any unfinished work with its current state. If a durable fact belongs in ' +
+  'long-term memory, update the relevant topic file too. Then reply "OK".';
 
 export const MODELS: Record<string, string> = {
   'haiku-4-5': 'claude-haiku-4-5',
   'sonnet-4-5': 'claude-sonnet-4-5',
   'sonnet-4-6': 'claude-sonnet-4-6',
+  'sonnet-5': 'claude-sonnet-5',
   'opus-4-6': 'claude-opus-4-6',
+  'opus-4-8': 'claude-opus-4-8',
 };
 
 export const MODEL_DISPLAY: Record<string, string> = {
   'claude-haiku-4-5': 'Haiku 4.5',
   'claude-sonnet-4-5': 'Sonnet 4.5',
   'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-sonnet-5': 'Sonnet 5',
   'claude-opus-4-6': 'Opus 4.6',
+  'claude-opus-4-8': 'Opus 4.8',
 };
 
 export const EFFORT_LEVELS: Effort[] = ['low', 'medium', 'high', 'max'];
@@ -47,7 +59,6 @@ export class Gateway {
   }>>();
   private cronScheduler?: CronScheduler;
   private webhookServer?: WebhookServer;
-  private chatModels = new Map<string, string>();
   private approvalEnabled = new Map<string, boolean>();
 
   constructor(
@@ -56,6 +67,7 @@ export class Gateway {
     private agent: Agent,
     private memory: Memory,
     private roster: Roster | null = null,
+    private prefs: PrefsStore | null = null,
   ) {}
 
   setCronScheduler(scheduler: CronScheduler): void {
@@ -123,13 +135,38 @@ export class Gateway {
     const key = sessionKey ?? chatId;
     const sessionId = this.sessions.getSessionId(key);
     const model = this.selectModel(chatId, text, source);
+    const effort = this.selectEffort(chatId, text, source);
     const cleanText = source === 'user' ? stripPrefix(text) : text;
     const { response, sessionId: newSessionId } = await this.agent.run(
-      cleanText, sessionId, chatId, model, onStream, peerCtx,
+      cleanText, sessionId, chatId, model, onStream, peerCtx, effort,
     );
+
+    if (source === 'system') {
+      // Maintenance turns (rotation wrap-up, nightly distill) end their session:
+      // the next real message starts fresh with memory intact.
+      await this.sessions.clearSession(key);
+      return response;
+    }
+
     if (newSessionId) {
       await this.sessions.setSessionId(key, newSessionId);
     }
+
+    // Session rotation: past the cap, queue a wrap-up turn behind this one.
+    // It summarizes to the daily log, then (as source 'system') clears the session.
+    if (
+      source === 'user' &&
+      this.config.sessionMaxMessages > 0 &&
+      this.sessions.getCount(key) >= this.config.sessionMaxMessages
+    ) {
+      console.log(`[gateway] Session ${key} hit ${this.sessions.getCount(key)} messages — rotating`);
+      this.handleMessage(chatId, ROTATION_PROMPT, undefined, 'system', key).catch(err => {
+        console.error('[gateway] rotation wrap-up failed:', err);
+        // Still rotate — a stuck giant session is worse than a lost summary
+        void this.sessions.clearSession(key);
+      });
+    }
+
     return response;
   }
 
@@ -156,8 +193,9 @@ export class Gateway {
   /**
    * Route a message to the appropriate model tier.
    *   1. User /deep or /light prefix → deep/light override (single message).
-   *   2. cron/webhook/voice → light (formatting / transcription relay).
-   *   3. Per-chat session default set via /model.
+   *   2. cron/webhook → light (background relay work).
+   *   3. Per-chat session default set via /model. Voice is real user input,
+   *      so transcripts get the same model as typed messages.
    *   4. config.modelDefault.
    */
   selectModel(chatId: string, message: string, source: MessageSource): string {
@@ -165,26 +203,39 @@ export class Gateway {
       if (/^\/deep(\s|$)/.test(message)) return this.config.modelDeep;
       if (/^\/light(\s|$)/.test(message)) return this.config.modelLight;
     }
-    if (source === 'cron' || source === 'webhook' || source === 'voice') {
+    if (source === 'cron' || source === 'webhook' || source === 'system') {
       return this.config.modelLight;
     }
-    return this.chatModels.get(chatId) || this.config.modelDefault;
+    return this.prefs?.get(chatId).model || this.config.modelDefault;
   }
 
-  setModel(chatId: string, model: string): void {
-    this.chatModels.set(chatId, model);
+  /**
+   * Effort per message: /deep bumps to high for that message; otherwise the
+   * per-chat preference, falling back to the config default. Background
+   * sources (cron/webhook/system) stay at the config default.
+   */
+  selectEffort(chatId: string, message: string, source: MessageSource): Effort {
+    if (source === 'user' && /^\/deep(\s|$)/.test(message)) return 'high';
+    if (source === 'user' || source === 'voice') {
+      return this.prefs?.get(chatId).effort || this.config.effort;
+    }
+    return this.config.effort;
+  }
+
+  async setModel(chatId: string, model: string): Promise<void> {
+    await this.prefs?.set(chatId, { model });
   }
 
   getModel(chatId: string): string {
-    return this.chatModels.get(chatId) || this.config.modelDefault;
+    return this.prefs?.get(chatId).model || this.config.modelDefault;
   }
 
-  setEffort(effort: Effort): void {
-    this.config.effort = effort;
+  async setEffort(chatId: string, effort: Effort): Promise<void> {
+    await this.prefs?.set(chatId, { effort });
   }
 
-  getEffort(): Effort {
-    return this.config.effort;
+  getEffort(chatId: string): Effort {
+    return this.prefs?.get(chatId).effort || this.config.effort;
   }
 
   setThinking(mode: ThinkingMode): void {

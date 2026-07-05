@@ -47,7 +47,7 @@ export class WebhookServer {
     });
   }
 
-  async create(webhookPath: string, prompt: string, chatId: number, secret?: string): Promise<WebhookDef> {
+  async create(webhookPath: string, prompt: string, chatId: number | string, secret?: string): Promise<WebhookDef> {
     // Ensure path starts with /
     const normalizedPath = webhookPath.startsWith('/') ? webhookPath : `/${webhookPath}`;
     const id = `wh_${Date.now().toString(36)}`;
@@ -77,7 +77,7 @@ export class WebhookServer {
         const def = await this.create(
           input.path as string,
           input.prompt as string,
-          (input.chatId as number) || 0,
+          (input.chatId as number | string) || 0,
           input.secret as string | undefined,
         );
         return `Created webhook: ${def.id} → ${def.path}`;
@@ -139,7 +139,10 @@ export class WebhookServer {
           return;
         }
         const expected = 'sha256=' + crypto.createHmac('sha256', webhook.secret).update(body).digest('hex');
-        if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+        const sigBuf = Buffer.from(signature);
+        const expBuf = Buffer.from(expected);
+        // Length check first — timingSafeEqual throws on mismatched lengths
+        if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
           res.writeHead(403, { 'Content-Type': 'text/plain' });
           res.end('Invalid signature');
           return;

@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.70",
+    "@slack/bolt": "^4.7.3",
     "dotenv": "^16.4.7",
     "grammy": "^1.31.0",
     "node-cron": "^3.0.3",

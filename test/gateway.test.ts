@@ -1,21 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Gateway } from '../src/gateway.js';
-import type { Config } from '../src/types.js';
+import { testConfig } from './helpers.js';
 
-const config: Config = {
-  telegramBotToken: 'x',
-  allowedUsers: [],
-  model: 'claude-sonnet-4-5',
-  maxTokens: 8192,
-  workspaceDir: './workspace',
-  dataDir: './data',
-  shellAllowlist: [],
-  webhookPort: 3000,
-  openaiApiKey: '',
-  effort: 'low',
-  thinking: 'disabled',
-};
+const config = testConfig();
 
 class FakeAgent {
   delays: number[] = [];
@@ -29,9 +17,13 @@ class FakeAgent {
 }
 
 class FakeSessions {
-  map = new Map<string, string>();
-  getSessionId(chatId: string) { return this.map.get(chatId); }
-  async setSessionId(chatId: string, id: string) { this.map.set(chatId, id); }
+  map = new Map<string, { sessionId: string; count: number }>();
+  getSessionId(chatId: string) { return this.map.get(chatId)?.sessionId; }
+  getCount(chatId: string) { return this.map.get(chatId)?.count ?? 0; }
+  async setSessionId(chatId: string, id: string) {
+    const prev = this.map.get(chatId);
+    this.map.set(chatId, { sessionId: id, count: (prev?.count ?? 0) + 1 });
+  }
   async clearSession(chatId: string) { this.map.delete(chatId); }
 }
 
@@ -39,11 +31,27 @@ class FakeMemory {
   getMemory() { return ''; }
 }
 
+class FakePrefs {
+  store = new Map<string, { model?: string; effort?: string }>();
+  get(chatId: string) { return this.store.get(chatId) || {}; }
+  async set(chatId: string, patch: object) {
+    this.store.set(chatId, { ...this.store.get(chatId), ...patch });
+  }
+}
+
+function makeGateway(agent = new FakeAgent(), cfg = config, sessions = new FakeSessions()) {
+  return {
+    gw: new Gateway(cfg, sessions as any, agent as any, new FakeMemory() as any, null, new FakePrefs() as any),
+    agent,
+    sessions,
+  };
+}
+
 describe('Gateway', () => {
   it('serializes messages for the same chat', async () => {
     const agent = new FakeAgent();
     agent.delays = [50, 10, 10];
-    const gw = new Gateway(config, new FakeSessions() as any, agent as any, new FakeMemory() as any);
+    const { gw } = makeGateway(agent);
 
     const order: string[] = [];
     const p1 = gw.handleMessage('chat1', 'A').then(r => order.push(r));
@@ -58,7 +66,7 @@ describe('Gateway', () => {
   it('runs different chats concurrently', async () => {
     const agent = new FakeAgent();
     agent.delays = [50, 10];
-    const gw = new Gateway(config, new FakeSessions() as any, agent as any, new FakeMemory() as any);
+    const { gw } = makeGateway(agent);
 
     const start = Date.now();
     await Promise.all([
@@ -79,7 +87,7 @@ describe('Gateway', () => {
         return { response: `re:${prompt}`, sessionId: sessionId || 's1' };
       }
     })();
-    const gw = new Gateway(config, new FakeSessions() as any, agent as any, new FakeMemory() as any);
+    const { gw } = makeGateway(agent);
 
     const streamed1: string[] = [];
     const streamed2: string[] = [];
@@ -92,8 +100,7 @@ describe('Gateway', () => {
   });
 
   it('drain resolves when no work pending', async () => {
-    const agent = new FakeAgent();
-    const gw = new Gateway(config, new FakeSessions() as any, agent as any, new FakeMemory() as any);
+    const { gw } = makeGateway();
     const start = Date.now();
     await gw.drain();
     assert.ok(Date.now() - start < 50);
@@ -102,7 +109,7 @@ describe('Gateway', () => {
   it('drain waits for in-flight work', async () => {
     const agent = new FakeAgent();
     agent.delays = [80];
-    const gw = new Gateway(config, new FakeSessions() as any, agent as any, new FakeMemory() as any);
+    const { gw } = makeGateway(agent);
     const p = gw.handleMessage('chat1', 'A');
     await new Promise(r => setTimeout(r, 5));
     const drainStart = Date.now();
@@ -110,5 +117,41 @@ describe('Gateway', () => {
     const elapsed = Date.now() - drainStart;
     assert.ok(elapsed >= 60, `drain returned too early: ${elapsed}ms`);
     await p;
+  });
+
+  it('routes voice to the chat default model, cron/webhook/system to light', () => {
+    const { gw } = makeGateway();
+    assert.equal(gw.selectModel('c', 'hi', 'voice'), config.modelDefault);
+    assert.equal(gw.selectModel('c', 'hi', 'cron'), config.modelLight);
+    assert.equal(gw.selectModel('c', 'hi', 'webhook'), config.modelLight);
+    assert.equal(gw.selectModel('c', 'hi', 'system'), config.modelLight);
+    assert.equal(gw.selectModel('c', '/deep hi', 'user'), config.modelDeep);
+  });
+
+  it('selectEffort: /deep bumps to high, per-chat pref wins otherwise', async () => {
+    const { gw } = makeGateway();
+    assert.equal(gw.selectEffort('c', '/deep hi', 'user'), 'high');
+    assert.equal(gw.selectEffort('c', 'hi', 'user'), config.effort);
+    await gw.setEffort('c', 'max');
+    assert.equal(gw.selectEffort('c', 'hi', 'user'), 'max');
+    // Background sources ignore per-chat pref
+    assert.equal(gw.selectEffort('c', 'hi', 'cron'), config.effort);
+  });
+
+  it('rotates the session after sessionMaxMessages user exchanges', async () => {
+    const agent = new FakeAgent();
+    const sessions = new FakeSessions();
+    const cfg = testConfig({ sessionMaxMessages: 2 });
+    const { gw } = makeGateway(agent, cfg, sessions);
+
+    await gw.handleMessage('chat1', 'one');
+    assert.equal(sessions.getCount('chat1'), 1);
+    await gw.handleMessage('chat1', 'two');
+    await gw.drain(); // wrap-up turn is queued behind the triggering message
+
+    // Third agent call is the rotation wrap-up, and the session is gone
+    assert.equal(agent.calls.length, 3);
+    assert.match(agent.calls[2], /rotated/);
+    assert.equal(sessions.getSessionId('chat1'), undefined);
   });
 });
